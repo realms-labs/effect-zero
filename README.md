@@ -5,8 +5,8 @@
 ```ts
 // server/zero.ts
 import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
-import { ZeroPushResponse, ZeroPushParams, ZeroPushBody } from "interop/zero/types";
-import * as ZeroServer from "interop/zero/server";
+import { ZeroPushResponse, ZeroPushParams, ZeroPushBody } from "effect-zero/types";
+import * as ZeroServer from "effect-zero/server";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import postgres from "postgres";
@@ -73,7 +73,7 @@ export async function handleZeroPush(req: Request): Promise<Response> {
 ```ts
 // client/zero.ts
 import { Zero } from "@rocicorp/zero";
-import * as ZeroClient from "interop/zero/client";
+import * as ZeroClient from "effect-zero/client";
 import * as Effect from "effect/Effect";
 import { schema } from "./schema"; // your schema
 
