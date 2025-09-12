@@ -42,10 +42,23 @@ export const serverMutators = zero.mutators<MutatorArgs>()({
       // Note, we can run arbitrary logic before/after performing the zero transaction
       // this is a unique feature which is not supported by the default zero push processor implementation
       // shipped with the base `@rocicorp/zero` package
-      yield* zero.Transaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
+      
+      // before the transaction
+      yield Effect.log("before the transaction");
+
+      Effect.gen(function* () {
+        // during the transaction
+        yield Effect.log("during the transaction");
+        yield* zero.Transaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
+        yield* zero.Transaction.use((tx) => tx.mutate.TodoTable.update({ id, done: false }));
+        // ...
+      }).pipe(zero.Transaction.execute);
+
+      // after the transaction
+      yield Effect.log("after the transaction");
     }),
     toggle: Effect.fn(function* ({ id, done }) {
-      yield* zero.Transaction.use((tx) => tx.mutate.TodoTable.update({ id, done }));
+      yield* zero.Transaction.use((tx) => tx.mutate.TodoTable.update({ id, done })).pipe(zero.Transaction.execute);
     }),
   },
 });
