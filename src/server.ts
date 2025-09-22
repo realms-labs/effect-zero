@@ -48,8 +48,8 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       const result = yield* Deferred.make<A, E | Effect.Effect.Error<typeof checkAndIncrementLastMutationID>>();
 
       const transactionInput = yield* ZeroTransactionInput;
-      yield* Effect.tryPromise(
-        (signal) =>
+      yield* Effect.tryPromise({
+        try: (signal) =>
           options.database.transaction(async (transaction, transactionHooks) => {
             const exit = await Effect.zipRight(checkAndIncrementLastMutationID, effect).pipe(
               Effect.provideService(ZeroServerTransactionContext, { transaction, transactionHooks }),
@@ -64,9 +64,12 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
               throw cause;
             });
           }, transactionInput),
-        // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
-        // This can be caused by e.g. the database connection timing out or other database-related issues.
-      ).pipe(Effect.mapError((cause) => new ZeroDatabaseError({ cause: Cause.fail(cause) })));
+        catch: (error) => {
+          // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
+          // This can be caused by e.g. the database connection timing out or other database-related issues.
+          return new ZeroDatabaseError({ cause: Cause.fail(error) });
+        }
+      });
 
       return yield* result;
     });

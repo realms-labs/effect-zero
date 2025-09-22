@@ -1,0 +1,34 @@
+{
+  "name": "tests",
+  "module": "index.ts",
+  "dependencies": {
+    "@effect/platform-bun": "^0.79.0",
+    "@rocicorp/zero": "^0.23.2025090100",
+    "bun-storage": "^1.1.1",
+    "drizzle-orm": "^0.44.5",
+    "drizzle-zero": "^0.14.0",
+    "nanoid": "^5.1.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.22",
+    "drizzle-kit": "^0.31.4",
+    "vitest": "^3.2.4"
+  },
+  "private": true,
+  "scripts": {
+    "gen": "drizzle-zero generate --format -s drizzle.schema.ts -o schema.gen.ts",
+    "dev": "bun index.ts",
+    "test:types": "tsc"
+  },
+  "trustedDependencies": [
+    "@parcel/watcher",
+    "@rocicorp/zero-sqlite3",
+    "esbuild",
+    "msgpackr-extract",
+    "protobufjs"
+  ],
+  "type": "module",
+  "patchedDependencies": {
+    "bun-storage@1.1.1": "patches/bun-storage@1.1.1.patch"
+  }
+}

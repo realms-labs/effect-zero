@@ -23,7 +23,7 @@ const database = new ZQLDatabase(connection, schema);
 export const zero = ZeroServer.makeServer({
   database,
   // this part is optional, but it allows us to use the client mutators on the server side
-  clientTransaction: zeroClient.Transaction
+  clientTransaction: zeroClient.Transaction,
 });
 
 // define mutators (same as client, see below)

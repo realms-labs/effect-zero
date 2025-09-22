@@ -1,0 +1,12 @@
+diff --git a/index.ts b/index.ts
+index 376dccd67f627cda903a349cc85dd1299b75152c..3725cfe415237ccdb3e969675cfd226f637b2f5c 100644
+--- a/index.ts
++++ b/index.ts
+@@ -115,6 +115,7 @@ export class Storage {
+ 	get length(): number {
+ 		const rows = this.#db.prepare('SELECT COUNT(*) FROM kv').get() as Record<string, string>;
+ 
++		// @ts-ignore
+ 		return Number.parseInt(rows['COUNT(*)'], 10) || 0;
+ 	}
+ 
