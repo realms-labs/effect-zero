@@ -67,7 +67,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         catch: (error) => {
           // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
           // This can be caused by e.g. the database connection timing out or other database-related issues.
-          return new ZeroDatabaseError({ cause: Cause.fail(error) });
+          return new ZeroDatabaseError({ cause: Cause.isCause(error) ? error : Cause.fail(error) });
         }
       });
 

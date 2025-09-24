@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+
+dotenv.config({ path: 'tests/.env', quiet: true });
 
 import { PostgresJSConnection, ZQLDatabase } from '@rocicorp/zero/pg';
 import { afterAll, beforeAll, beforeEach, expect, expectTypeOf, mock, test } from 'bun:test';
@@ -6,7 +8,7 @@ import postgres from "postgres";
 import { schema, type Schema as ZeroSchema } from './schema';
 import * as ZeroServer from "../src/server";
 import * as ZeroClient from "../src/client";
-import { Duration, Effect, Layer, Option, pipe, Schema, Scope, Stream, StreamEmit, Subscribable } from 'effect';
+import { Console, Duration, Effect, Layer, Option, pipe, Schema, Scope, Stream, StreamEmit, Subscribable } from 'effect';
 import { Zero } from '@rocicorp/zero';
 import { HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { BunHttpServer } from "@effect/platform-bun";
@@ -30,6 +32,8 @@ const database = new ZQLDatabase(connection, schema);
 type MutatorArgs = {
   messages: {
     create: Message;
+    noTransaction: void;
+    doubleTransaction: void;
   };
 };
 
@@ -49,18 +53,30 @@ const createMessage = mock(Effect.fn(function* (item: Message) {
 const clientMutators = zeroClient.mutators<MutatorArgs>()({
   messages: {
     create: createMessage,
+    noTransaction: Effect.fn(function* () { }),
+    doubleTransaction: Effect.fn(function* () { }),
   }
 });
-
 
 const serverMutators = zeroServer.mutators<MutatorArgs>()({
   messages: {
     create: Effect.fn(function* (item: Message) {
       yield* createMessage(item)
         .pipe(zeroServer.Transaction.execute);
-    })
+    }),
+    noTransaction: Effect.fn(function* () { }),
+    doubleTransaction: Effect.fn(function* () {
+      yield* zeroServer.Transaction.use(async (tx) => {
+        await tx.mutate.messages.insert({ id: nanoid(), body: 'hello world' });
+      }).pipe(zeroServer.Transaction.execute);
+      yield* zeroServer.Transaction.use(async (tx) => {
+        await tx.mutate.messages.insert({ id: nanoid(), body: 'hello world' });
+      }).pipe(zeroServer.Transaction.execute);
+    }),
   }
 });
+
+const onError = mock((...args) => console.error('onError:', ...args));
 
 const z = new Zero({
   userID: 'anon',
@@ -69,7 +85,8 @@ const z = new Zero({
   mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
   push: {
     url: 'http://localhost:3000/push',
-  }
+  },
+  onError,
 });
 
 const serverController = new AbortController();
@@ -95,12 +112,21 @@ beforeAll(async () => {
       return (yield* HttpServerResponse.json(responseBody)).pipe(
         HttpServerResponse.setStatus(200),
         HttpServerResponse.setHeader("content-type", "application/json"),
+      );
+    })
+      .pipe(
+        Effect.catchAll((e) => {
+          console.error('Push processor error:', e);
+          return pipe(
+            HttpServerResponse.empty(),
+            HttpServerResponse.setStatus(500)
+          );
+        })
       )
-    })),
-    Effect.tapErrorCause((e) => Effect.logError(e)),
+    ),
   );
 
-  const app = router.pipe(HttpServer.serve(), HttpServer.withLogAddress);
+  const app = router.pipe(HttpServer.serve());
   const ServerLive = BunHttpServer.layer({ port: 3000 });
   Effect.runPromiseExit(Layer.launch(Layer.provide(app, ServerLive)), { signal: serverController.signal });
 });
@@ -110,6 +136,8 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
+  onError.mockReset();
+
   const c = await ddb.select({ count: count() }).from(messages).then((r) => r[0]!.count);
   if (c > 0) {
     await rawDb`truncate table messages`;
@@ -236,4 +264,21 @@ test('custom mutators work', async () => {
 
   const result = await rawDb`select id, body from messages`;
   expect(result.slice()).toEqual([item]);
+});
+
+test.skip('mutator without transaction should reject', async () => {
+  expect(z.mutate.messages.noTransaction().server).rejects.toBeDefined();
+});
+
+test.skip('mutator that invokes transaction more than once should reject', async () => {
+  expect(z.mutate.messages.doubleTransaction().server).rejects.toBeDefined();
+});
+
+test.skip('out of order mutations should be rejected', async () => {
+  await z.mutate.messages.create({ id: nanoid(), body: 'hello world' }).server;
+
+  // Simulate database corruption
+  await rawDb`truncate table zero_0.clients`;
+
+  expect(z.mutate.messages.create({ id: nanoid(), body: 'hello world' }).server).rejects.toBeDefined();
 });
