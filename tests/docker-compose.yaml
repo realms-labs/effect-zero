@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 5432:5432
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+    healthcheck:
+      test: ["CMD-SHELL", "sh -c 'pg_isready -U postgres -d postgres'"]
+      interval: 1s
+      timeout: 60s
+      retries: 10

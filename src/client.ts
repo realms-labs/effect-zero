@@ -5,7 +5,6 @@ import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import { identity } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
@@ -59,11 +58,7 @@ export const makeClient = <S extends Schema>() => {
     const view = yield* Effect.acquireRelease(
       Effect.sync(() => query.materialize()),
       (view) => Effect.sync(() => view.destroy()),
-    ).pipe(
-      // Needed to avoid type errors for some reason
-      identity,
     );
-
     const subscriptionRef = yield* SubscriptionRef.make<QueryResult<R>>(getDefaultSnapshot(query.format.singular));
 
     yield* Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
