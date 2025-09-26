@@ -26,6 +26,8 @@ import {
   type ZeroPushResponse,
 } from "./types";
 
+// Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
+
 // TODO(zero) thing that prevents using multiple transactions in a mutator.
 // - update: Ah, maybe handled by `OutOfOrderMutationError` and `MutationAlreadyProcessedError`?
 // TODO(zero) I think this thing also needs to ensure that *exactly* one transaction occurs, as otherwise the
@@ -56,7 +58,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
               options.clientTransaction
                 ? Effect.provideService(options.clientTransaction, transaction)
                 : // TODO: Is there a cleaner way to write this?
-                <A, E, R>(effect: Effect.Effect<A, E, R>) => effect as Effect.Effect<A, E, Exclude<R, I>>,
+                  <A, E, R>(effect: Effect.Effect<A, E, R>) => effect as Effect.Effect<A, E, Exclude<R, I>>,
               (effect) => Runtime.runPromiseExit(runtime, effect, { signal }),
             );
             Deferred.unsafeDone(result, exit);
@@ -64,11 +66,9 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
               throw cause;
             });
           }, transactionInput),
-        catch: (error) => {
-          // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
-          // This can be caused by e.g. the database connection timing out or other database-related issues.
-          return new ZeroDatabaseError({ cause: Cause.isCause(error) ? error : Cause.fail(error) });
-        }
+        // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
+        // This can be caused by e.g. the database connection timing out or other database-related issues.
+        catch: (error) => new ZeroDatabaseError({ cause: Cause.fail(error) }),
       });
 
       return yield* result;
@@ -90,8 +90,6 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
     const { transactionHooks } = yield* ZeroServerTransactionContext;
     const { clientID, mutationID: receivedMutationID } = yield* ZeroTransactionInput;
 
-    yield* Effect.logDebug(`Incrementing LMID. Received: ${receivedMutationID}`);
-
     const { lastMutationID } = yield* Effect.tryPromise({
       try: () => transactionHooks.updateClientMutationID(),
       catch: (error) => new UpdateClientMutationIDError({ cause: Cause.fail(error) }),
@@ -111,8 +109,6 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         lastMutationID,
       });
     }
-
-    yield* Effect.logDebug(`Incremented LMID. Received: ${receivedMutationID}. New: ${lastMutationID}`);
   });
 
   const processPush = Effect.fn(function* <R>(
@@ -121,27 +117,32 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
     request: ZeroPushBody,
   ) {
     if (request.pushVersion !== 1) {
-      yield* Effect.logError(
-        `Unsupported push version ${request.pushVersion} for clientGroupID ${request.clientGroupID}`,
-      );
       return { error: "unsupportedPushVersion" as const };
     }
 
     const responses = yield* Stream.fromIterable(request.mutations).pipe(
-      Stream.mapEffect((mutation) =>
-        processMutation(mutators, mutation).pipe(
-          Effect.map((result) =>
-            ZeroMutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
-          ),
-          Effect.provideService(ZeroTransactionInput, {
-            clientID: mutation.clientID,
-            mutationID: mutation.id,
-            clientGroupID: request.clientGroupID,
-            upstreamSchema: params.schema,
-          }),
-        ),
+      Stream.mapEffect(
+        Effect.fn(function* (mutation) {
+          if (mutation.type !== "custom") {
+            return yield* new CustomMutationExpectedError({});
+          }
+          return yield* processMutation(mutators, mutation).pipe(
+            Effect.map((result) =>
+              ZeroMutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
+            ),
+            Effect.provideService(ZeroTransactionInput, {
+              clientID: mutation.clientID,
+              mutationID: mutation.id,
+              clientGroupID: request.clientGroupID,
+              upstreamSchema: params.schema,
+            }),
+          );
+        }),
       ),
-      Stream.takeUntil(({ result }) => Predicate.hasProperty(result, "error")),
+      // We only stop processing if the mutation is out of order.
+      // If the mutation has already been processed or if it returns an application error,
+      // we continue processing the next mutation.
+      Stream.takeUntil(({ result }) => Predicate.hasProperty(result, "error") && result.error === "oooMutation"),
       Stream.runCollect,
     );
 
@@ -150,11 +151,10 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
 
   /** @internal */
   const processMutation = Effect.fn(function* <R>(mutators: MutatorSchema<R>, mutation: ZeroMutation) {
-    if (mutation.type === "crud") {
-      return yield* new CrudMutatorDeprecatedError();
-    }
-
-    const [namespace, name] = Str.split(mutation.name, "|");
+    // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
+    const [namespace, name] = mutation.name.includes("|")
+      ? Str.split(mutation.name, "|")
+      : Str.split(mutation.name, ".");
     const mutator = yield* pipe(
       mutators,
       Rec.get<string>(namespace),
@@ -184,28 +184,32 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
   /** @internal */
   const processMutationError = Effect.fn(function* (e: unknown) {
     const { clientID, mutationID } = yield* ZeroTransactionInput;
-    const result = yield* ZeroServerTransactionContext.execute(Effect.void).pipe(Effect.as<ZeroMutationResult>({}));
 
-    if (Predicate.hasProperty(result, "error")) {
-      yield* Effect.logError(
-        `Error ${result.error} processing mutation ${mutationID} for client ${clientID}: ${result.details}`,
-      );
-      return result;
-    }
+    yield* Effect.logError(`Unexpected error processing mutation ${mutationID} for client ${clientID}`);
 
-    yield* Effect.logError(
-      `Unexpected error processing mutation ${mutationID} for client ${clientID}: ${e instanceof Error ? e.message : "Unknown error"}`,
-    );
-    return {
+    const appError = {
       error: "app" as const,
       details: e instanceof Error ? e.message : "exception was not of type `Error`",
     };
+
+    yield* ZeroServerTransactionContext.execute(
+      Effect.flatMap(ZeroServerTransactionContext, ({ transactionHooks }) => {
+        return Effect.tryPromise({
+          try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
+          catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
+        });
+      }),
+    );
+
+    yield* Effect.logWarning(`Mutation ${mutationID} for client ${clientID} was retried after an error: ${e}`);
+
+    return appError;
   });
 
   const mutators =
     <M extends MutatorArgs>() =>
-      <R>(mutators: MutatorSchema<R, M>) =>
-        mutators;
+    <R>(mutators: MutatorSchema<R, M>) =>
+      mutators;
 
   return {
     Transaction: ZeroServerTransactionContext,
@@ -218,20 +222,23 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
 class ZeroTransactionInput extends Context.Tag(prefixId("ZeroTransactionInput"))<
   ZeroTransactionInput,
   TransactionProviderInput
->() { }
+>() {}
 
 class ZeroServerTransactionError extends Data.TaggedError("ZeroServerTransactionError")<{
   cause: Cause.Cause<unknown>;
-}> { }
+}> {}
 class ZeroProcessMutationError extends Data.TaggedError("ZeroProcessMutationError")<{
   cause: Cause.Cause<unknown>;
-}> { }
-class ZeroDatabaseError extends Data.TaggedError("ZeroDatabaseError")<{ cause: Cause.Cause<unknown> }> { }
+}> {}
+class ZeroDatabaseError extends Data.TaggedError("ZeroDatabaseError")<{ cause: Cause.Cause<unknown> }> {}
 class UpdateClientMutationIDError extends Data.TaggedError("UpdateClientMutationIDError")<{
   readonly cause: Cause.Cause<unknown>;
-}> { }
-class CrudMutatorDeprecatedError extends Data.TaggedError("CrudMutatorDeprecatedError") { }
-class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{ name: string }> { }
+}> {}
+class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{ name: string }> {}
+class WriteMutationResultError extends Data.TaggedError("WriteMutationResultError")<{
+  readonly cause: Cause.Cause<unknown>;
+}> {}
+class CustomMutationExpectedError extends Data.TaggedError("CustomMutationExpectedError")<object> {}
 
 const OutOfOrderMutationErrorTypeId = Symbol.for(prefixId("OutOfOrderMutationError"));
 /** @internal */

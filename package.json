@@ -4,7 +4,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "typecheck": "tsc --noEmit --incremental"
+    "typecheck": "tsc --noEmit --incremental",
+    "lint": "biome check --error-on-warnings",
+    "lint:fix": "biome check --write --unsafe"
   },
   "devDependencies": {
     "@types/bun": "latest"
@@ -13,9 +15,12 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@biomejs/biome": "2.2.4",
+    "@effect/language-service": "latest",
     "@effect-atom/atom": "^0.1.20",
     "@rocicorp/zero": "^0.23.2025090100",
-    "effect": "^3.17.13"
+    "effect": "^3.17.13",
+    "ts-patch": "3.3.0"
   },
   "patchedDependencies": {
     "typescript@5.9.2": "patches/typescript@5.9.2.patch"

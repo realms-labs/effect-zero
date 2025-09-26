@@ -10,9 +10,11 @@ import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { prefixId } from "./utils";
 import type { MutatorArgs, MutatorSchema } from "./mutators";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot";
+import { prefixId } from "./utils";
+
+// Updated to: https://github.com/rocicorp/mono/blob/2e18f2e1d084c530ebd9bd7fef9bb848e607cc19/packages/zero-pg/src/push-processor.ts
 
 export const makeClient = <S extends Schema>() => {
   // TODO: Maybe prefix this / suffix this with a tag passed in to `make`?
@@ -33,8 +35,8 @@ export const makeClient = <S extends Schema>() => {
 
   const mutators =
     <M extends MutatorArgs>() =>
-      <R>(mutators: MutatorSchema<R, M>) =>
-        mutators;
+    <R>(mutators: MutatorSchema<R, M>) =>
+      mutators;
 
   const unwrapMutators = <M extends MutatorArgs, R>(mutators: MutatorSchema<R, M>) => {
     return Effect.gen(function* () {
@@ -59,6 +61,7 @@ export const makeClient = <S extends Schema>() => {
       Effect.sync(() => query.materialize()),
       (view) => Effect.sync(() => view.destroy()),
     );
+
     const subscriptionRef = yield* SubscriptionRef.make<QueryResult<R>>(getDefaultSnapshot(query.format.singular));
 
     yield* Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
@@ -105,4 +108,4 @@ export type UnwrappedMutatorSchema<S extends Schema, M extends MutatorArgs> = {
 
 class ZeroClientTransactionError extends Data.TaggedError("ZeroClientTransactionError")<{
   cause: Cause.Cause<unknown>;
-}> { }
+}> {}

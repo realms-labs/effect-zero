@@ -24,6 +24,26 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
-    "noErrorTruncation": true
-  }
+    "noErrorTruncation": true,
+
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "transform": "@effect/language-service/transform",
+        "namespaceImportPackages": [
+          "effect",
+          "@effect/platform",
+          "@effect/platform-bun",
+          "@effect/platform-browser",
+          "@effect/opentelemetry",
+          "@effect/rpc",
+          "@effect/vitest"
+        ],
+        "diagnosticSeverity": {
+          "importFromBarrel": "error"
+        }
+      }
+    ]
+  },
+  "exclude": ["node_modules", "tests"]
 }
