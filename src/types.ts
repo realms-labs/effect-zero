@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 // The code below was converted to Effect Schema from:
-// https://github.com/rocicorp/mono/blob/main/packages/zero-protocol/src/push.ts
+// https://github.com/rocicorp/mono/blob/30f209f2946b4cf2cd2dee459849351498f11308/packages/zero-protocol/src/push.ts
 
 /** TODO: Defined as unknown for now */
 const JsonSchema = Schema.Unknown;
@@ -182,6 +182,9 @@ export type ZeroPushResponse = typeof ZeroPushResponse.Type;
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
 const ZeroPushResponseMessage = Schema.Tuple(Schema.Literal("pushResponse"), ZeroPushResponse);
+
+// biome-ignore lint/correctness/noUnusedVariables: borrowed code
+const ZeroAckMutationResponsesMessage = Schema.Tuple(Schema.Literal("ackMutationResponses"), ZeroMutationId);
 
 /**
  * The schema for the querystring parameters of the custom push endpoint.
