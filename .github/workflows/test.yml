@@ -6,6 +6,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-22.04
+    permissions: write-all
     steps:
       - uses: actions/checkout@v3
       - uses: oven-sh/setup-bun@v2
@@ -24,5 +25,4 @@ jobs:
           bun test
       - uses: JoA-MoS/lcov-reporter-action@v1.0.0-alpha.4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ./tests
