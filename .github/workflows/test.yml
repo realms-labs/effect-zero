@@ -25,4 +25,3 @@ jobs:
       - uses: romeovs/lcov-reporter-action@v0.2.16
         with:
           working-directory: ./tests
-          lcov-file: ./tests/.coverage/lcov.info
