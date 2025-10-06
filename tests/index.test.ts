@@ -11,7 +11,19 @@ import postgres from "postgres";
 import { schema, type Schema as ZeroSchema } from "./schema";
 import * as ZeroServer from "../src/server";
 import * as ZeroClient from "../src/client";
-import { Console, Duration, Effect, Layer, Option, pipe, Schema, type Scope, Stream, Subscribable } from "effect";
+import {
+  Chunk,
+  Console,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  pipe,
+  Schema,
+  type Scope,
+  Stream,
+  Subscribable,
+} from "effect";
 import { Zero } from "@rocicorp/zero";
 import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { BunHttpServer } from "@effect/platform-bun";
@@ -37,7 +49,10 @@ type MutatorArgs = {
     create: Message;
     throwsError: void;
     throwsErrorInsideTransaction: void;
+    throwsErrorAfterTransaction: void;
     yieldsError: void;
+    yieldsErrorInsideTransaction: void;
+    yieldsErrorAfterTransaction: void;
     noTransaction: void;
     doubleTransaction: void;
   };
@@ -63,7 +78,10 @@ const clientMutators = zeroClient.mutators<MutatorArgs>()({
     create: createMessage,
     throwsError: Effect.fn(function* () {}),
     throwsErrorInsideTransaction: Effect.fn(function* () {}),
+    throwsErrorAfterTransaction: Effect.fn(function* () {}),
     yieldsError: Effect.fn(function* () {}),
+    yieldsErrorInsideTransaction: Effect.fn(function* () {}),
+    yieldsErrorAfterTransaction: Effect.fn(function* () {}),
     noTransaction: Effect.fn(function* () {}),
     doubleTransaction: Effect.fn(function* () {}),
     // @ts-expect-error
@@ -85,8 +103,23 @@ const serverMutators = zeroServer.mutators<MutatorArgs>()({
         throw new Error("error in throwsErrorInsideTransaction");
       }).pipe(zeroServer.Transaction.execute);
     }),
+    throwsErrorAfterTransaction: Effect.fn(function* () {
+      yield* zeroServer.Transaction.use(async (tx) => {
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+      }).pipe(zeroServer.Transaction.execute);
+      throw new Error("error in throwsErrorAfterTransaction");
+    }),
     yieldsError: Effect.fn(function* () {
       yield* Effect.fail(new Error("error in yieldsError"));
+    }),
+    yieldsErrorInsideTransaction: Effect.fn(function* () {
+      yield* Effect.fail(new Error("error in yieldsErrorInsideTransaction")).pipe(zeroServer.Transaction.execute);
+    }),
+    yieldsErrorAfterTransaction: Effect.fn(function* () {
+      yield* zeroServer.Transaction.use(async (tx) => {
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+      }).pipe(zeroServer.Transaction.execute);
+      yield* Effect.fail(new Error("error in yieldsErrorAfterTransaction"));
     }),
     noTransaction: Effect.fn(function* () {}),
     doubleTransaction: Effect.fn(function* () {
@@ -102,16 +135,20 @@ const serverMutators = zeroServer.mutators<MutatorArgs>()({
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
-const z = new Zero({
-  userID: "anon",
-  server: "http://localhost:4848",
-  schema,
-  mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
-  push: {
-    url: "http://localhost:3000/push",
-  },
-  onError,
-});
+function initZero() {
+  return new Zero({
+    userID: "anon",
+    server: "http://localhost:4848",
+    schema,
+    mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
+    push: {
+      url: "http://localhost:3000/push",
+    },
+    onError,
+  });
+}
+
+let z: ReturnType<typeof initZero>;
 
 function waitForLastItem<A, E, R>(stream: Stream.Stream<A, E, R>) {
   return pipe(
@@ -123,6 +160,8 @@ function waitForLastItem<A, E, R>(stream: Stream.Stream<A, E, R>) {
   );
 }
 
+let responses = Chunk.empty<ZeroPushResponse>();
+
 beforeAll(async () => {
   const router = HttpRouter.empty.pipe(
     HttpRouter.post(
@@ -133,6 +172,8 @@ beforeAll(async () => {
         const result = yield* zeroServer.processPush(serverMutators, params, payload);
         // yield* Effect.log("Push result:", result);
         const responseBody = yield* Schema.encode(ZeroPushResponse)(result);
+
+        responses = Chunk.append(responses, responseBody);
 
         return (yield* HttpServerResponse.json(responseBody)).pipe(
           HttpServerResponse.setStatus(200),
@@ -166,6 +207,13 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   onError.mockReset();
+
+  responses = Chunk.empty<ZeroPushResponse>();
+
+  if (z) {
+    await z.close();
+  }
+  z = initZero();
 
   const c = await ddb
     .select({ count: count() })
@@ -308,11 +356,26 @@ test("mutator that throws error inside transaction should reject", async () => {
   });
 });
 
+test("mutator that throws error after transaction should resolve", async () => {
+  expect(z.mutate.messages.throwsErrorAfterTransaction().server).resolves.toBeDefined();
+});
+
 test("mutator that yields error should reject", async () => {
   expect(z.mutate.messages.yieldsError().server).rejects.toEqual({
     error: "app",
     details: "error in yieldsError",
   });
+});
+
+test("mutator that yields error inside transaction should reject", async () => {
+  expect(z.mutate.messages.yieldsErrorInsideTransaction().server).rejects.toEqual({
+    error: "app",
+    details: "error in yieldsErrorInsideTransaction",
+  });
+});
+
+test("mutator that yields error after transaction should resolve", async () => {
+  expect(z.mutate.messages.yieldsErrorAfterTransaction().server).resolves.toBeDefined();
 });
 
 test("mutator without transaction should reject", async () => {
@@ -326,13 +389,23 @@ test("mutator that invokes transaction more than once should reject", async () =
   await expect(z.mutate.messages.doubleTransaction().server).resolves.toBeDefined();
 });
 
-test.skip("out of order mutations should be rejected", async () => {
+test("out of order mutations should be rejected", async () => {
   await z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server;
 
   // Simulate database corruption
   await rawDb`truncate table zero_0.clients`;
 
-  expect(z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server).rejects.toBeDefined();
+  /*
+    In case of "out of order" error, the mutation promise is not rejected, but retried under the hood.
+    Since it won't ever be resolved or rejected in our case, we just run the mutation and check that
+    the last server response was "oooMutation" error.
+  */
+  z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server.then();
+
+  await Effect.sleep(Duration.millis(100)).pipe(Effect.runPromise);
+
+  const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
+  expect(lastResponse).toHaveProperty(["mutations", 0, "result", "error"], "oooMutation");
 });
 
 test("non-existing mutator should reject", async () => {
