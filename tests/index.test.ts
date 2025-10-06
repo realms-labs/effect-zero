@@ -1,5 +1,8 @@
-import dotenv from "dotenv";
+/** biome-ignore-all lint/suspicious/noExplicitAny: allowed in tests */
+/** biome-ignore-all lint/style/noNonNullAssertion: allowed in tests */
+/** biome-ignore-all lint/suspicious/noConfusingVoidType: allowed in tests */
 
+import dotenv from "dotenv";
 dotenv.config({ path: "tests/.env", quiet: true });
 
 import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";

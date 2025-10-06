@@ -51,6 +51,8 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         const mutationCtx = yield* ZeroServerMutationContext;
         const wasTransactionExecuted = yield* Ref.get(mutationCtx.wasTransactionExecuted);
         if (wasTransactionExecuted) {
+          // Case #3 "Two or more transactions"
+          // This is later handled by case #2
           return yield* new MultipleTransactionsError();
         }
 
@@ -97,7 +99,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
 
         return yield* result;
       },
-      Effect.tap(ZeroServerMutationContext.pipe(Effect.flatMap((ctx) => Ref.set(ctx.wasTransactionExecuted, true)))),
+      Effect.tap(Effect.andThen(ZeroServerMutationContext, (ctx) => Ref.set(ctx.wasTransactionExecuted, true))),
     );
 
     static use = <A>(fn: (transaction: T, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
@@ -195,17 +197,19 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       );
 
       return yield* mutator(mutation.args[0]).pipe(
+        // Case #2 "One transaction then fail"
         // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
-        Effect.catchAllCause((e) =>
-          Effect.gen(function* () {
+        Effect.catchAllCause(
+          Effect.fn(function* (e) {
             const ctx = yield* ZeroServerMutationContext;
             const wasTransactionExecuted = yield* Ref.get(ctx.wasTransactionExecuted);
             if (wasTransactionExecuted) {
-              return yield* Effect.logError(e);
+              return yield* Effect.logError("Error occurred after transaction execution completed", e);
             }
             return yield* Effect.failCause(e);
           }),
         ),
+        // Case #4 "Zero transactions then succeed"
         // Check that the transaction was executed during the mutation
         Effect.tap(
           Effect.gen(function* () {
@@ -225,6 +229,8 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
             Effect.as({ error: "alreadyProcessed", details: e.message } satisfies ZeroError),
           ),
         ),
+        // Case #5 "Zero transactions then fail" / #6 "Fail before transaction"
+        // Catches all errors that are produced before the transaction is executed
         Effect.catchAllCause((e) => new ZeroMutationUserError({ cause: e })),
       );
     },
