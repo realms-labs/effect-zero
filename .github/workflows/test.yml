@@ -24,4 +24,5 @@ jobs:
           bun test
       - uses: JoA-MoS/lcov-reporter-action@v1.0.0-alpha.4
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: ./tests
