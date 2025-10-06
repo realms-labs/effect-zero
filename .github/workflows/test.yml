@@ -6,7 +6,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-22.04
-    permissions: write-all
+    permissions:
+      pull-requests: write
     steps:
       - uses: actions/checkout@v3
       - uses: oven-sh/setup-bun@v2
