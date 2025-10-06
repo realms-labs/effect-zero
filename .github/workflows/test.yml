@@ -22,3 +22,7 @@ jobs:
           bun zero-cache-dev > /dev/null 2>&1 &
           sleep 10
           bun test
+      - uses: romeovs/lcov-reporter-action@v0.2.16
+        with:
+          working-directory: ./tests
+          lcov-file: ./tests/.coverage/lcov.info
