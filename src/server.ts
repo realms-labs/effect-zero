@@ -189,7 +189,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
         Effect.catchAllCause(
           Effect.fn(function* (e) {
-            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted;
+            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted.pipe(Effect.flatten);
             if (wasTransactionExecuted) {
               return yield* Effect.logError("Error occurred after transaction execution completed", e);
             }
@@ -200,7 +200,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         // Check that the transaction was executed during the mutation
         Effect.tap(
           Effect.gen(function* () {
-            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted;
+            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted.pipe(Effect.flatten);
             if (!wasTransactionExecuted) {
               return yield* new NoTransactionError();
             }
@@ -281,6 +281,8 @@ class ZeroServerMutationContext extends Effect.Service<ZeroServerMutationContext
   },
 ) {
   static wasTransactionExecuted = Effect.map(ZeroServerMutationContext, (ctx) => ctx.wasTransactionExecuted);
+
+  // Ensures that only one transaction is executed at a time and checks that another transaction wasn't already executed.
   static guard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.flatMap(this.wasTransactionExecuted, (wasTransactionExecuted) =>
       SynchronizedRef.modifyEffect(

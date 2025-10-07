@@ -55,6 +55,7 @@ type MutatorArgs = {
     yieldsErrorAfterTransaction: void;
     noTransaction: void;
     doubleTransaction: void;
+    concurrentTransactions: void;
   };
 };
 
@@ -86,6 +87,7 @@ const clientMutators = zeroClient.mutators<MutatorArgs>()({
     doubleTransaction: Effect.fn(function* () {}),
     // @ts-expect-error
     nonExistingMutator: Effect.fn(function* () {}),
+    concurrentTransactions: Effect.fn(function* () {}),
   },
 });
 
@@ -129,6 +131,19 @@ const serverMutators = zeroServer.mutators<MutatorArgs>()({
       yield* zeroServer.Transaction.use(async (tx) => {
         await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
       }).pipe(zeroServer.Transaction.execute);
+    }),
+    concurrentTransactions: Effect.fn(function* () {
+      yield* Effect.all(
+        [
+          zeroServer.Transaction.use(async (tx) => {
+            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+          }).pipe(zeroServer.Transaction.execute),
+          zeroServer.Transaction.use(async (tx) => {
+            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+          }).pipe(zeroServer.Transaction.execute),
+        ],
+        { concurrency: "unbounded" },
+      );
     }),
   },
 });
@@ -413,4 +428,8 @@ test("non-existing mutator should reject", async () => {
     error: "app",
     details: "Internal error",
   });
+});
+
+test("concurrent transactions should be resolved", async () => {
+  await expect(z.mutate.messages.concurrentTransactions().server).resolves.toBeDefined();
 });
