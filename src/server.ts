@@ -6,7 +6,7 @@ import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { identity, pipe } from "effect/Function";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -87,7 +87,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       Effect.andThen(ZeroServerTransactionContext, (ctx) =>
         Effect.tryPromise({
           try: (signal) => fn(ctx.transaction, { signal }),
-          catch: identity,
+          catch: Fn.identity,
         }),
       );
   }
@@ -164,7 +164,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       const [namespace, name] = mutation.name.includes("|")
         ? Str.split(mutation.name, "|")
         : Str.split(mutation.name, ".");
-      const mutator = yield* pipe(
+      const mutator = yield* Fn.pipe(
         mutators,
         Rec.get<string>(namespace),
         Option.flatMap((mutator) =>
@@ -182,7 +182,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
         Effect.catchAllCause(
           Effect.fn(function* (e) {
-            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted.pipe(Effect.flatten);
+            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted;
             if (wasTransactionExecuted) {
               return yield* Effect.logError("Error occurred after transaction execution completed", e);
             }
@@ -193,7 +193,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         // Check that the transaction was executed during the mutation
         Effect.tap(
           Effect.gen(function* () {
-            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted.pipe(Effect.flatten);
+            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted;
             if (!wasTransactionExecuted) {
               return yield* new NoTransactionError();
             }
@@ -273,11 +273,11 @@ class ZeroServerMutationContext extends Effect.Service<ZeroServerMutationContext
     }),
   },
 ) {
-  static wasTransactionExecuted = Effect.map(ZeroServerMutationContext, (ctx) => ctx.wasTransactionExecuted);
+  static wasTransactionExecuted = Effect.flatMap(ZeroServerMutationContext, (ctx) => ctx.wasTransactionExecuted);
 
   // Ensures that only one transaction is executed at a time and checks that another transaction wasn't already executed.
   static guard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.flatMap(this.wasTransactionExecuted, (wasTransactionExecuted) =>
+    Effect.flatMap(this, ({ wasTransactionExecuted }) =>
       SynchronizedRef.modifyEffect(
         wasTransactionExecuted,
         Effect.fn(function* (wasTransactionExecuted) {
@@ -291,17 +291,33 @@ class ZeroServerMutationContext extends Effect.Service<ZeroServerMutationContext
     );
 }
 
-class ZeroDatabaseError extends Data.TaggedError("ZeroDatabaseError")<{ cause: Cause.Cause<unknown> }> {}
+class ZeroDatabaseError extends Data.TaggedError("ZeroDatabaseError")<{
+  cause: Cause.Cause<unknown>;
+}> {}
+
 class UpdateClientMutationIDError extends Data.TaggedError("UpdateClientMutationIDError")<{
   readonly cause: Cause.Cause<unknown>;
 }> {}
-class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{ mutationName: string }> {
+
+class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
+  mutationName: string;
+}> {
   override message = `Mutator not found for mutation ${this.mutationName}`;
 }
+
 class WriteMutationResultError extends Data.TaggedError("WriteMutationResultError")<{
   readonly cause: Cause.Cause<unknown>;
 }> {}
 class CustomMutationExpectedError extends Data.TaggedError("CustomMutationExpectedError")<object> {}
+
+/** @internal */
+export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {
+  override message = "Multiple transactions detected in a mutation, only one transaction is allowed.";
+}
+
+export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
+  override message = "No transaction detected in a mutation, a transaction is required.";
+}
 
 const OutOfOrderMutationErrorTypeId = Symbol.for(prefixId("OutOfOrderMutationError"));
 /** @internal */
@@ -332,29 +348,6 @@ export class MutationAlreadyProcessedError extends Data.TaggedError("MutationAlr
   }
   static is(e: unknown): e is MutationAlreadyProcessedError {
     return Predicate.hasProperty(e, MutationAlreadyProcessedErrorTypeId);
-  }
-}
-
-const MultipleTransactionsErrorTypeId = Symbol.for(prefixId("MultipleTransactionsError"));
-/** @internal */
-export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {
-  readonly [MultipleTransactionsErrorTypeId] = MultipleTransactionsErrorTypeId;
-  override get message() {
-    return `Multiple transactions detected in a mutation, only one transaction is allowed.`;
-  }
-  static is(e: unknown): e is MultipleTransactionsError {
-    return Predicate.hasProperty(e, MultipleTransactionsErrorTypeId);
-  }
-}
-
-const NoTransactionErrorTypeId = Symbol.for(prefixId("NoTransactionError"));
-export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
-  readonly [NoTransactionErrorTypeId] = NoTransactionErrorTypeId;
-  override get message() {
-    return `No transaction detected in a mutation, a transaction is required.`;
-  }
-  static is(e: unknown): e is NoTransactionError {
-    return Predicate.hasProperty(e, NoTransactionErrorTypeId);
   }
 }
 

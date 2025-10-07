@@ -8,11 +8,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": [
-      "**",
-      "!migrations",
-      "!schema.gen.ts"
-    ]
+    "includes": ["**", "!migrations", "!schema.gen.ts"]
   },
   "formatter": {
     "enabled": true,
