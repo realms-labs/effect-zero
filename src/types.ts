@@ -134,6 +134,7 @@ const ZeroMutationOk = Schema.Struct({
 
 const ZeroMutationError = Schema.Union(ZeroAppError, ZeroError);
 
+// We flip the original order here as otherwise values of type ZeroMutationError would get parsed as ZeroMutationOk with empty `data`
 export const ZeroMutationResult = Schema.Union(ZeroMutationError, ZeroMutationOk);
 export type ZeroMutationResult = typeof ZeroMutationResult.Type;
 

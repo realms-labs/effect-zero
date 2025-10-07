@@ -217,7 +217,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         ),
         // Case #5 "Zero transactions then fail" / #6 "Fail before transaction"
         // Catches all errors that are produced before the transaction is executed
-        Effect.catchAllCause((e) => new ZeroMutationUserError({ cause: e })),
+        Effect.catchAllCause((cause) => new ZeroMutationUserError({ cause })),
       );
     },
     Effect.catchAll((e) => processMutationError(e)),
