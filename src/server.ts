@@ -6,7 +6,7 @@ import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { pipe } from "effect/Function";
+import { identity, pipe } from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -14,10 +14,11 @@ import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
-import { prefixId } from "./utils";
-
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import type { MutatorArgs, MutatorSchema } from "./mutators";
 import {
+  type ZeroAppError,
+  type ZeroError,
   type ZeroMutation,
   ZeroMutationResponse,
   type ZeroMutationResult,
@@ -25,6 +26,7 @@ import {
   type ZeroPushParams,
   type ZeroPushResponse,
 } from "./types";
+import { prefixId } from "./utils";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
@@ -62,26 +64,38 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
               (effect) => Runtime.runPromiseExit(runtime, effect, { signal }),
             );
             Deferred.unsafeDone(result, exit);
-            return Exit.getOrElse(exit, (cause) => {
-              throw cause;
+            return Exit.getOrElse(exit, () => {
+              /*
+            This error's purpose is to differentiate between "external" errors
+            that originate from the user-defined mutator code and "internal" errors
+            that originate from our own code and the Zero API.
+            Both types are caught in the "catch" block below, but at this point we only need to handle
+            the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
+            are already covered by passing the Exit result to the Deferred, which is why
+            we have the ZeroTransactionUserError silenced below in the pipe.
+            */
+              throw new ZeroTransactionUserError();
             });
           }, transactionInput),
-        // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
-        // This can be caused by e.g. the database connection timing out or other database-related issues.
-        catch: (error) => new ZeroDatabaseError({ cause: Cause.fail(error) }),
-      });
+        catch: (error) => {
+          if (ZeroTransactionUserError.is(error)) {
+            return error;
+          }
+          // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
+          // This can be caused by e.g. the database connection timing out or other database-related issues.
+          return new ZeroDatabaseError({ cause: Cause.fail(error) });
+        },
+      }).pipe(Effect.catchTag("ZeroTransactionUserError", () => Effect.void));
 
       return yield* result;
-    });
+    }, ZeroServerMutationContext.guard);
 
     static use = <A>(fn: (transaction: T, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
       Effect.andThen(ZeroServerTransactionContext, (ctx) =>
-        Effect.promise((signal) => fn(ctx.transaction, { signal })),
-      ).pipe(
-        Effect.tapErrorCause((cause) => Effect.logError(cause)),
-        Effect.sandbox,
-        Effect.annotateLogs({ module: prefixId("ZeroServer.Transaction"), method: "use" }),
-        Effect.mapError((cause) => new ZeroServerTransactionError({ cause })),
+        Effect.tryPromise({
+          try: (signal) => fn(ctx.transaction, { signal }),
+          catch: identity,
+        }),
       );
   }
 
@@ -144,53 +158,87 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       // we continue processing the next mutation.
       Stream.takeUntil(({ result }) => Predicate.hasProperty(result, "error") && result.error === "oooMutation"),
       Stream.runCollect,
+      Effect.annotateLogs({ module: prefixId("ZeroServer"), method: "processPush" }),
     );
 
     return { mutations: Chunk.toArray(responses) } satisfies ZeroPushResponse;
   });
 
   /** @internal */
-  const processMutation = Effect.fn(function* <R>(mutators: MutatorSchema<R>, mutation: ZeroMutation) {
-    // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
-    const [namespace, name] = mutation.name.includes("|")
-      ? Str.split(mutation.name, "|")
-      : Str.split(mutation.name, ".");
-    const mutator = yield* pipe(
-      mutators,
-      Rec.get<string>(namespace),
-      Option.flatMap((mutator) =>
-        Match.value([mutator, name]).pipe(
-          Match.when([Predicate.isRecord, Predicate.isString], ([mutator, name]) => Rec.get<string>(name)(mutator)),
-          Match.when([Predicate.isFunction, Predicate.isUndefined], ([mutator]) => Option.some(mutator)),
-          Match.orElse(() => Option.none()),
+  const processMutation = Effect.fn(
+    function* <R>(mutators: MutatorSchema<R>, mutation: ZeroMutation) {
+      // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
+      const [namespace, name] = mutation.name.includes("|")
+        ? Str.split(mutation.name, "|")
+        : Str.split(mutation.name, ".");
+      const mutator = yield* pipe(
+        mutators,
+        Rec.get<string>(namespace),
+        Option.flatMap((mutator) =>
+          Match.value([mutator, name]).pipe(
+            Match.when([Predicate.isRecord, Predicate.isString], ([mutator, name]) => Rec.get<string>(name)(mutator)),
+            Match.when([Predicate.isFunction, Predicate.isUndefined], ([mutator]) => Option.some(mutator)),
+            Match.orElse(() => Option.none()),
+          ),
         ),
-      ),
-      Effect.catchTag("NoSuchElementException", () => new MutatorNotFoundError({ name: mutation.name })),
-    );
+        Effect.catchTag("NoSuchElementException", () => new MutatorNotFoundError({ mutationName: mutation.name })),
+      );
 
-    return yield* mutator(mutation.args[0]).pipe(
-      Effect.as<ZeroMutationResult>({}),
-      Effect.catchIf(OutOfOrderMutationError.is, (e) =>
-        Effect.logError(e.message).pipe(Effect.as({ error: "oooMutation" as const, details: e.message })),
-      ),
-      Effect.catchIf(MutationAlreadyProcessedError.is, (e) =>
-        Effect.logWarning(e.message).pipe(Effect.as({ error: "alreadyProcessed" as const, details: e.message })),
-      ),
-      Effect.catchAll(processMutationError),
-      Effect.mapError((e) => new ZeroProcessMutationError({ cause: Cause.fail(e) })),
-    );
-  });
+      return yield* mutator(mutation.args[0]).pipe(
+        // Case #2 "One transaction then fail"
+        // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
+        Effect.catchAllCause(
+          Effect.fn(function* (e) {
+            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted.pipe(Effect.flatten);
+            if (wasTransactionExecuted) {
+              return yield* Effect.logError("Error occurred after transaction execution completed", e);
+            }
+            return yield* Effect.failCause(e);
+          }),
+        ),
+        // Case #4 "Zero transactions then succeed"
+        // Check that the transaction was executed during the mutation
+        Effect.tap(
+          Effect.gen(function* () {
+            const wasTransactionExecuted = yield* ZeroServerMutationContext.wasTransactionExecuted.pipe(Effect.flatten);
+            if (!wasTransactionExecuted) {
+              return yield* new NoTransactionError();
+            }
+          }),
+        ),
+        Effect.as<ZeroMutationResult>({}),
+        Effect.catchIf(OutOfOrderMutationError.is, (e) =>
+          Effect.logError(e.message).pipe(Effect.as({ error: "oooMutation", details: e.message } satisfies ZeroError)),
+        ),
+        Effect.catchIf(MutationAlreadyProcessedError.is, (e) =>
+          Effect.logWarning(e.message).pipe(
+            Effect.as({ error: "alreadyProcessed", details: e.message } satisfies ZeroError),
+          ),
+        ),
+        // Case #5 "Zero transactions then fail" / #6 "Fail before transaction"
+        // Catches all errors that are produced before the transaction is executed
+        Effect.catchAllCause((cause) => new ZeroMutationUserError({ cause })),
+      );
+    },
+    Effect.catchAll((e) => processMutationError(e)),
+    Effect.provide(ZeroServerMutationContext.Default),
+  );
 
   /** @internal */
   const processMutationError = Effect.fn(function* (e: unknown) {
     const { clientID, mutationID } = yield* ZeroTransactionInput;
 
-    yield* Effect.logError(`Unexpected error processing mutation ${mutationID} for client ${clientID}`);
+    yield* Effect.logError(`Unexpected error processing mutation ${mutationID} for client ${clientID}`, Cause.fail(e));
+
+    const errorMessage = Match.value(e).pipe(
+      Match.when(ZeroMutationUserError.is, (e) => e.message),
+      Match.orElse(() => "Internal error"),
+    );
 
     const appError = {
-      error: "app" as const,
-      details: e instanceof Error ? e.message : "exception was not of type `Error`",
-    };
+      error: "app",
+      details: errorMessage,
+    } satisfies ZeroAppError;
 
     yield* ZeroServerTransactionContext.execute(
       Effect.flatMap(ZeroServerTransactionContext, ({ transactionHooks }) => {
@@ -199,7 +247,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
           catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
         });
       }),
-    );
+    ).pipe(Effect.catchAllCause(Effect.logError));
 
     yield* Effect.logWarning(`Mutation ${mutationID} for client ${clientID} was retried after an error: ${e}`);
 
@@ -224,17 +272,39 @@ class ZeroTransactionInput extends Context.Tag(prefixId("ZeroTransactionInput"))
   TransactionProviderInput
 >() {}
 
-class ZeroServerTransactionError extends Data.TaggedError("ZeroServerTransactionError")<{
-  cause: Cause.Cause<unknown>;
-}> {}
-class ZeroProcessMutationError extends Data.TaggedError("ZeroProcessMutationError")<{
-  cause: Cause.Cause<unknown>;
-}> {}
+class ZeroServerMutationContext extends Effect.Service<ZeroServerMutationContext>()(
+  prefixId("ZeroServerMutationContext"),
+  {
+    effect: Effect.gen(function* () {
+      return { wasTransactionExecuted: yield* SynchronizedRef.make(false) };
+    }),
+  },
+) {
+  static wasTransactionExecuted = Effect.map(ZeroServerMutationContext, (ctx) => ctx.wasTransactionExecuted);
+
+  // Ensures that only one transaction is executed at a time and checks that another transaction wasn't already executed.
+  static guard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.flatMap(this.wasTransactionExecuted, (wasTransactionExecuted) =>
+      SynchronizedRef.modifyEffect(
+        wasTransactionExecuted,
+        Effect.fn(function* (wasTransactionExecuted) {
+          if (wasTransactionExecuted) {
+            return yield* new MultipleTransactionsError();
+          }
+          const result = yield* effect;
+          return [result, true];
+        }),
+      ),
+    );
+}
+
 class ZeroDatabaseError extends Data.TaggedError("ZeroDatabaseError")<{ cause: Cause.Cause<unknown> }> {}
 class UpdateClientMutationIDError extends Data.TaggedError("UpdateClientMutationIDError")<{
   readonly cause: Cause.Cause<unknown>;
 }> {}
-class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{ name: string }> {}
+class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{ mutationName: string }> {
+  override message = `Mutator not found for mutation ${this.mutationName}`;
+}
 class WriteMutationResultError extends Data.TaggedError("WriteMutationResultError")<{
   readonly cause: Cause.Cause<unknown>;
 }> {}
@@ -269,5 +339,51 @@ export class MutationAlreadyProcessedError extends Data.TaggedError("MutationAlr
   }
   static is(e: unknown): e is MutationAlreadyProcessedError {
     return Predicate.hasProperty(e, MutationAlreadyProcessedErrorTypeId);
+  }
+}
+
+const MultipleTransactionsErrorTypeId = Symbol.for(prefixId("MultipleTransactionsError"));
+/** @internal */
+export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {
+  readonly [MultipleTransactionsErrorTypeId] = MultipleTransactionsErrorTypeId;
+  override get message() {
+    return `Multiple transactions detected in a mutation, only one transaction is allowed.`;
+  }
+  static is(e: unknown): e is MultipleTransactionsError {
+    return Predicate.hasProperty(e, MultipleTransactionsErrorTypeId);
+  }
+}
+
+const NoTransactionErrorTypeId = Symbol.for(prefixId("NoTransactionError"));
+export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
+  readonly [NoTransactionErrorTypeId] = NoTransactionErrorTypeId;
+  override get message() {
+    return `No transaction detected in a mutation, a transaction is required.`;
+  }
+  static is(e: unknown): e is NoTransactionError {
+    return Predicate.hasProperty(e, NoTransactionErrorTypeId);
+  }
+}
+
+const ZeroTransactionUserErrorTypeId = Symbol.for(prefixId("ZeroTransactionUserError"));
+export class ZeroTransactionUserError extends Data.TaggedError("ZeroTransactionUserError") {
+  readonly [ZeroTransactionUserErrorTypeId] = ZeroTransactionUserErrorTypeId;
+  static is(e: unknown): e is ZeroTransactionUserError {
+    return Predicate.hasProperty(e, ZeroTransactionUserErrorTypeId);
+  }
+}
+
+const ZeroMutationUserErrorTypeId = Symbol.for(prefixId("ZeroMutationUserError"));
+export class ZeroMutationUserError extends Data.TaggedError("ZeroMutationUserError")<{
+  cause: Cause.Cause<unknown>;
+}> {
+  readonly [ZeroMutationUserErrorTypeId] = ZeroMutationUserErrorTypeId;
+  static is(e: unknown): e is ZeroMutationUserError {
+    return Predicate.hasProperty(e, ZeroMutationUserErrorTypeId);
+  }
+
+  override get message() {
+    const err = Cause.squash(this.cause);
+    return err instanceof Error ? err.message : "exception was not of type `Error`";
   }
 }

@@ -175,3 +175,13 @@ export const deleteMessageAtom = Atom.fn(
 );
 ```
 
+## Differences from the original implementation
+
+One key difference is that `effect-zero` requires you to manually wrap your DB-related logic in a transaction inside a mutator code, whereas the original implementation automatically wraps the whole mutation in a transaction. This allows you to define some logic outside of transaction (either before or after), but it also creates some edge cases that are not possible in the original implementation, because now the transaction might succeed, but the code outside of it might fail. Below are the edge case rules that `effect-zero` follows during the mutation execution:
+
+1. "One transaction and succeed" -> successful response from the push endpoint (normal flow).
+2. "One transaction then fail" (code after the transaction produces an error) -> successful response, despite the mutation failing. This is essential to maintain integrity of Zero's internal state: the transaction has already succeeded (and altered the state of the database), thus the result from the push endpoint must coincide. Relatedly, the user must be careful with work performed after the transaction, it is considered "fire and forget".
+3. "Two or more transactions" -> This is a sub-case of the "One transaction then fail (#2)" scenario; the first transaction will succeed (and thus we must return a successful response from the push endpoint), and the second one will fail. We must be careful of performing multiple transactions in the mutator for this reason.
+4. "Zero transactions then succeed" -> error response, because all mutations must have a transaction.
+5. "Zero transactions then fail" -> error response containing the first error encountered.
+6. "Fail before transaction" -> same as #5.
