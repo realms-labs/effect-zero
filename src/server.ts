@@ -30,13 +30,8 @@ import { prefixId } from "./utils";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
-// TODO(zero) thing that prevents using multiple transactions in a mutator.
-// - update: Ah, maybe handled by `OutOfOrderMutationError` and `MutationAlreadyProcessedError`?
-// TODO(zero) I think this thing also needs to ensure that *exactly* one transaction occurs, as otherwise the
-// lastMutationID won't be incremented.
-
 // NOTE(zero): Using the "Lifting the Generic" technique.
-// NOTE(zero): Could not accept `Database<T>` as a param and instead create some `ZeroDatabase` service inside the
+// NOTE(zero): Could choose to not accept `Database<T>` as a param and instead create some `ZeroDatabase` service inside the
 // `make` function, which various other functions require. However, this means that the user will have to manually
 // specify the `T` type parameter which seemed a bit clunky.
 export const makeServer = <T, I = never>(options: { database: Database<T>; clientTransaction?: Context.Tag<I, T> }) => {
@@ -65,15 +60,13 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
             );
             Deferred.unsafeDone(result, exit);
             return Exit.getOrElse(exit, () => {
-              /*
-            This error's purpose is to differentiate between "external" errors
-            that originate from the user-defined mutator code and "internal" errors
-            that originate from our own code and the Zero API.
-            Both types are caught in the "catch" block below, but at this point we only need to handle
-            the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
-            are already covered by passing the Exit result to the Deferred, which is why
-            we have the ZeroTransactionUserError silenced below in the pipe.
-            */
+              // This error's purpose is to differentiate between "external" errors
+              // that originate from the user-defined mutator code and "internal" errors
+              // that originate from our own code and the Zero API.
+              // Both types are caught in the "catch" block below, but at this point we only need to handle
+              // the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
+              // are already covered by passing the Exit result to the Deferred, which is why
+              // we have the ZeroTransactionUserError silenced below in the pipe.
               throw new ZeroTransactionUserError();
             });
           }, transactionInput),
