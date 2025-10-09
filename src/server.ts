@@ -15,7 +15,7 @@ import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import type { MutatorArgs, MutatorSchema } from "./mutators";
+import type { ExtractMutatorSchemaRequirements, AnyZeroMutators } from "./mutators";
 import {
   type ZeroAppError,
   type ZeroError,
@@ -30,67 +30,71 @@ import { prefixId } from "./utils";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
+export interface ZeroServerTransactionContext {
+  readonly _tag: unique symbol;
+}
+
 // NOTE(zero): Using the "Lifting the Generic" technique.
 // NOTE(zero): Could choose to not accept `Database<T>` as a param and instead create some `ZeroDatabase` service inside the
 // `make` function, which various other functions require. However, this means that the user will have to manually
 // specify the `T` type parameter which seemed a bit clunky.
 export const makeServer = <T, I = never>(options: { database: Database<T>; clientTransaction?: Context.Tag<I, T> }) => {
-  // TODO: Maybe prefix this / suffix this with a tag passed in to `make`?
-  class ZeroServerTransactionContext extends Context.Tag(prefixId("ZeroServerTransactionContext"))<
+  const ZeroServerTransactionContext = Context.Tag(prefixId("ZeroServerTransactionContext"))<
     ZeroServerTransactionContext,
     { transaction: T; transactionHooks: TransactionProviderHooks }
-  >() {
-    static execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-      const runtime =
-        // TODO: Is there a cleaner way to write this?
-        yield* Effect.runtime<Exclude<Exclude<R | ZeroTransactionInput, ZeroServerTransactionContext>, I>>();
-      const result = yield* Deferred.make<A, E | Effect.Effect.Error<typeof checkAndIncrementLastMutationID>>();
+  >();
 
-      const transactionInput = yield* ZeroTransactionInput;
-      yield* Effect.tryPromise({
-        try: (signal) =>
-          options.database.transaction(async (transaction, transactionHooks) => {
-            const exit = await Effect.zipRight(checkAndIncrementLastMutationID, effect).pipe(
-              Effect.provideService(ZeroServerTransactionContext, { transaction, transactionHooks }),
-              options.clientTransaction
-                ? Effect.provideService(options.clientTransaction, transaction)
-                : // TODO: Is there a cleaner way to write this?
-                  <A, E, R>(effect: Effect.Effect<A, E, R>) => effect as Effect.Effect<A, E, Exclude<R, I>>,
-              (effect) => Runtime.runPromiseExit(runtime, effect, { signal }),
-            );
-            Deferred.unsafeDone(result, exit);
-            return Exit.getOrElse(exit, () => {
-              // This error's purpose is to differentiate between "external" errors
-              // that originate from the user-defined mutator code and "internal" errors
-              // that originate from our own code and the Zero API.
-              // Both types are caught in the "catch" block below, but at this point we only need to handle
-              // the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
-              // are already covered by passing the Exit result to the Deferred, which is why
-              // we have the ZeroTransactionUserError silenced below in the pipe.
-              throw new ZeroTransactionUserError();
-            });
-          }, transactionInput),
-        catch: (error) => {
-          if (ZeroTransactionUserError.is(error)) {
-            return error;
-          }
-          // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
-          // This can be caused by e.g. the database connection timing out or other database-related issues.
-          return new ZeroDatabaseError({ cause: Cause.fail(error) });
-        },
-      }).pipe(Effect.catchTag("ZeroTransactionUserError", () => Effect.void));
+  // TODO: Maybe prefix this / suffix this with a tag passed in to `make`?
+  const execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+    const runtime =
+      // TODO: Is there a cleaner way to write this?
+      yield* Effect.runtime<Exclude<Exclude<R | ZeroTransactionInput, ZeroServerTransactionContext>, I>>();
+    const result = yield* Deferred.make<A, E | Effect.Effect.Error<typeof checkAndIncrementLastMutationID>>();
 
-      return yield* result;
-    }, ZeroServerMutationContext.guard);
+    const transactionInput = yield* ZeroTransactionInput;
+    yield* Effect.tryPromise({
+      try: (signal) =>
+        options.database.transaction(async (transaction, transactionHooks) => {
+          const exit = await Effect.zipRight(checkAndIncrementLastMutationID, effect).pipe(
+            Effect.provideService(ZeroServerTransactionContext, { transaction, transactionHooks }),
+            options.clientTransaction
+              ? Effect.provideService(options.clientTransaction, transaction)
+              : // TODO: Is there a cleaner way to write this?
+                <A, E, R>(effect: Effect.Effect<A, E, R>) => effect as Effect.Effect<A, E, Exclude<R, I>>,
+            (effect) => Runtime.runPromiseExit(runtime, effect, { signal }),
+          );
+          Deferred.unsafeDone(result, exit);
+          return Exit.getOrElse(exit, () => {
+            // This error's purpose is to differentiate between "external" errors
+            // that originate from the user-defined mutator code and "internal" errors
+            // that originate from our own code and the Zero API.
+            // Both types are caught in the "catch" block below, but at this point we only need to handle
+            // the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
+            // are already covered by passing the Exit result to the Deferred, which is why
+            // we have the ZeroTransactionUserError silenced below in the pipe.
+            throw new ZeroTransactionUserError();
+          });
+        }, transactionInput),
+      catch: (error) => {
+        if (ZeroTransactionUserError.is(error)) {
+          return error;
+        }
+        // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
+        // This can be caused by e.g. the database connection timing out or other database-related issues.
+        return new ZeroDatabaseError({ cause: Cause.fail(error) });
+      },
+    }).pipe(Effect.catchTag("ZeroTransactionUserError", () => Effect.void));
 
-    static use = <A>(fn: (transaction: T, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
-      Effect.andThen(ZeroServerTransactionContext, (ctx) =>
-        Effect.tryPromise({
-          try: (signal) => fn(ctx.transaction, { signal }),
-          catch: Fn.identity,
-        }),
-      );
-  }
+    return yield* result;
+  }, ZeroServerMutationContext.guard);
+
+  const use = <A>(fn: (transaction: T, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
+    Effect.andThen(ZeroServerTransactionContext, (ctx) =>
+      Effect.tryPromise({
+        try: (signal) => fn(ctx.transaction, { signal }),
+        catch: Fn.identity,
+      }),
+    );
 
   /** @internal */
   const checkAndIncrementLastMutationID = Effect.gen(function* () {
@@ -118,8 +122,8 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
     }
   });
 
-  const processPush = Effect.fn(function* <R>(
-    mutators: MutatorSchema<R>,
+  const processPush = Effect.fn(function* <T extends AnyZeroMutators>(
+    mutators: T,
     params: ZeroPushParams,
     request: ZeroPushBody,
   ) {
@@ -133,7 +137,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
           if (mutation.type !== "custom") {
             return yield* new CustomMutationExpectedError({});
           }
-          return yield* processMutation(mutators, mutation).pipe(
+          return yield* processMutation<ExtractMutatorSchemaRequirements<T>>(mutators, mutation).pipe(
             Effect.map((result) =>
               ZeroMutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
             ),
@@ -159,7 +163,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
 
   /** @internal */
   const processMutation = Effect.fn(
-    function* <R>(mutators: MutatorSchema<R>, mutation: ZeroMutation) {
+    function* <R>(mutators: AnyZeroMutators<R>, mutation: ZeroMutation) {
       // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
       const [namespace, name] = mutation.name.includes("|")
         ? Str.split(mutation.name, "|")
@@ -233,7 +237,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       details: errorMessage,
     } satisfies ZeroAppError;
 
-    yield* ZeroServerTransactionContext.execute(
+    yield* execute(
       Effect.flatMap(ZeroServerTransactionContext, ({ transactionHooks }) => {
         return Effect.tryPromise({
           try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
@@ -247,15 +251,9 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
     return appError;
   });
 
-  const mutators =
-    <M extends MutatorArgs>() =>
-    <R>(mutators: MutatorSchema<R, M>) =>
-      mutators;
-
   return {
-    Transaction: ZeroServerTransactionContext,
+    Transaction: Object.assign(ZeroServerTransactionContext, { execute, use }),
     processPush,
-    mutators,
   };
 };
 

@@ -1,11 +1,74 @@
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as Rec from "effect/Record";
+import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
 
-// biome-ignore lint/suspicious/noExplicitAny: used as a function argument for the mutators
-export type MutatorArgs = Record<string, Record<string, any>>;
-
-export type MutatorSchema<R, M extends MutatorArgs = MutatorArgs> = {
-  [A in keyof M]: {
-    // TODO(zero): Allow errors, but they should probably be handled (?)
-    [B in keyof M[A]]: (args: M[A][B]) => Effect.Effect<void, unknown, R>;
-  };
+// biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
+export type AnyZeroMutators<R = any> = {
+  [K: string]: // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
+    | ((...args: any[]) => Effect.Effect<any, any, R>)
+    | {
+        // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
+        [K: string]: (...args: any[]) => Effect.Effect<any, any, R>;
+      };
 };
+
+export type ExtractMutatorSchemaRequirements<T extends AnyZeroMutators> = {
+  [K in keyof T]: T[K] extends (arg: unknown) => Effect.Effect<unknown, unknown, infer TReqs>
+    ? TReqs
+    : {
+        [J in keyof T[K]]: T[K][J] extends (arg: unknown) => Effect.Effect<unknown, unknown, infer TReqs>
+          ? TReqs
+          : never;
+      }[keyof T[K]];
+}[keyof T];
+
+export type ZeroMutatorSchemaShapeCore = Schema.Schema.Any;
+export type ZeroMutatorSchemaShape = Record<
+  string,
+  ZeroMutatorSchemaShapeCore | Record<string, ZeroMutatorSchemaShapeCore>
+>;
+
+export type ZeroMutators<T extends ZeroMutatorSchemaShape> = {
+  [A in keyof T]: T[A] extends ZeroMutatorSchemaShapeCore
+    ? (args: Schema.Schema.Type<T[A]>) => Effect.Effect<unknown, unknown, unknown>
+    : T[A] extends Record<string, ZeroMutatorSchemaShapeCore>
+      ? ZeroMutators<T[A]>
+      : never;
+};
+
+export class ZeroMutatorSchema<T extends ZeroMutatorSchemaShape> {
+  private constructor(public schema: T) {}
+
+  static make<T extends ZeroMutatorSchemaShape>(schema: T) {
+    return new ZeroMutatorSchema(schema);
+  }
+
+  makeClientMutators<TMutators extends ZeroMutators<T>>(mutators: TMutators): TMutators;
+  /** @internal */
+  makeClientMutators(mutators: AnyZeroMutators, schema?: ZeroMutatorSchemaShape): AnyZeroMutators;
+  makeClientMutators(mutators: AnyZeroMutators, schema: ZeroMutatorSchemaShape = this.schema): AnyZeroMutators {
+    // Adds argument validation to the mutator
+    function makeMutator<T extends (...args: unknown[]) => Effect.Effect<unknown, unknown, unknown>>(
+      argsSchema: Schema.Schema.Any,
+      fn: T,
+    ) {
+      return ((arg) => Effect.andThen(Schema.decode(argsSchema)(arg), fn)) as T;
+    }
+
+    return Rec.map(mutators, (v, name) => {
+      return Match.value([v, schema[name]]).pipe(
+        Match.when([Predicate.isFunction, Schema.isSchema], ([mutator, schema]) => makeMutator(schema, mutator)),
+        Match.when([Predicate.isRecord, Predicate.isRecord], ([mutator, schema]) =>
+          this.makeClientMutators(mutator, schema),
+        ),
+        Match.orElseAbsurd,
+      );
+    }) as AnyZeroMutators;
+  }
+
+  makeServerMutators<TMutators extends ZeroMutators<T>>(mutators: TMutators) {
+    return mutators;
+  }
+}

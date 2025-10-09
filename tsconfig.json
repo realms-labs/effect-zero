@@ -6,7 +6,7 @@
     "module": "ESNext",
     "moduleDetection": "force",
     "jsx": "react-jsx",
-    "allowJs": true,
+    "allowJs": false,
     "outDir": "dist",
 
     // Bundler mode
@@ -26,6 +26,7 @@
     "noErrorTruncation": true,
 
     "declaration": true,
+    "stripInternal": true,
 
     "plugins": [
       {
