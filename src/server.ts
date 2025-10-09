@@ -15,7 +15,7 @@ import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import type { ExtractMutatorSchemaRequirements, AnyZeroMutators } from "./mutators";
+import type { AnyZeroMutators, ExtractMutatorSchemaRequirements } from "./mutators";
 import {
   type ZeroAppError,
   type ZeroError,

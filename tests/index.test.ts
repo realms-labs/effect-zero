@@ -3,18 +3,22 @@
 /** biome-ignore-all lint/suspicious/noConfusingVoidType: allowed in tests */
 
 import dotenv from "dotenv";
+
 dotenv.config({ path: "tests/.env", quiet: true });
 
-import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
 import { beforeAll, beforeEach, expect, expectTypeOf, test, vi } from "bun:test";
-import postgres from "postgres";
-import { schema, type Schema as ZeroSchema } from "./schema";
-import * as ZeroServer from "../src/server";
-import * as ZeroClient from "../src/client";
-import { ZeroMutatorSchema } from "../src/mutators";
+import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
+import { BunHttpServer } from "@effect/platform-bun";
+import { Atom, Registry, Result } from "@effect-atom/atom";
+import { Zero } from "@rocicorp/zero";
+import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
+import { createSessionStorage } from "bun-storage";
+import { count } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
 import {
   Chunk,
   Console,
+  Context,
   Duration,
   Effect,
   Layer,
@@ -25,16 +29,15 @@ import {
   Stream,
   Subscribable,
 } from "effect";
-import { Zero } from "@rocicorp/zero";
-import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
-import { BunHttpServer } from "@effect/platform-bun";
-import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "../src/types";
-import { drizzle } from "drizzle-orm/postgres-js";
-import { count } from "drizzle-orm";
-import { messages } from "./drizzle.schema";
 import { nanoid } from "nanoid";
-import { Atom, Registry, Result } from "@effect-atom/atom";
-import { createSessionStorage } from "bun-storage";
+import postgres from "postgres";
+import * as ZeroClient from "../src/client";
+import { ZeroMutatorSchema } from "../src/mutators";
+import * as ZeroServer from "../src/server";
+import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "../src/types";
+import { prefixId } from "../src/utils";
+import { messages } from "./drizzle.schema";
+import { schema, type Schema as ZeroSchema } from "./schema";
 import type { Message } from "./schema.gen";
 
 const [sessionStorage] = createSessionStorage();
@@ -65,9 +68,15 @@ const mutatorSchema = ZeroMutatorSchema.make({
 
 const zeroClient = ZeroClient.makeClient<ZeroSchema>();
 
+class DummyTag extends Context.Tag(prefixId("DummyTag"))<DummyTag, { dummy: string }>() {
+  static layer = Layer.succeed(DummyTag, { dummy: "dummy" });
+}
+
 const clientMutators = mutatorSchema.makeClientMutators({
   messages: {
     create: Effect.fn(function* (msg) {
+      const { dummy } = yield* DummyTag;
+      yield* Effect.log(dummy);
       yield* zeroClient.Transaction.use(async (tx) => {
         await tx.mutate.messages.insert(msg);
       });
