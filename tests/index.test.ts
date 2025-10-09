@@ -32,7 +32,7 @@ import {
 import { nanoid } from "nanoid";
 import postgres from "postgres";
 import * as ZeroClient from "../src/client";
-import { ZeroMutatorSchema } from "../src/mutators";
+import { type ExtractMutatorSchemaRequirements, ZeroMutatorSchema } from "../src/mutators";
 import * as ZeroServer from "../src/server";
 import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "../src/types";
 import { prefixId } from "../src/utils";
