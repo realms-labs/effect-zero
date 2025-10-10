@@ -1,8 +1,8 @@
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
-import * as Rec from "effect/Record";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
+import * as Schema from "effect/Schema";
 
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
 export type AnyZeroMutators<R = any> = {
@@ -14,15 +14,9 @@ export type AnyZeroMutators<R = any> = {
       };
 };
 
-export type ExtractMutatorSchemaRequirements<T extends AnyZeroMutators> = {
-  [K in keyof T]: T[K] extends (arg: unknown) => Effect.Effect<unknown, unknown, infer TReqs>
-    ? TReqs
-    : {
-        [J in keyof T[K]]: T[K][J] extends (arg: unknown) => Effect.Effect<unknown, unknown, infer TReqs>
-          ? TReqs
-          : never;
-      }[keyof T[K]];
-}[keyof T];
+export type ExtractMutatorSchemaRequirements<T extends AnyZeroMutators> = T extends AnyZeroMutators<infer R>
+  ? R
+  : never;
 
 export type ZeroMutatorSchemaShapeCore = Schema.Schema.Any;
 export type ZeroMutatorSchemaShape = Record<
