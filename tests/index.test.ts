@@ -18,7 +18,6 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import {
   Chunk,
   Console,
-  Context,
   Duration,
   Effect,
   Layer,
@@ -32,7 +31,7 @@ import {
 import { nanoid } from "nanoid";
 import postgres from "postgres";
 import * as ZeroClient from "../src/client";
-import { type ExtractMutatorSchemaRequirements, ZeroMutatorSchema } from "../src/mutators";
+import { ZeroMutatorSchema } from "../src/mutators";
 import * as ZeroServer from "../src/server";
 import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "../src/types";
 import { prefixId } from "../src/utils";
@@ -55,6 +54,10 @@ const mutatorSchema = ZeroMutatorSchema.make({
       body: Schema.String,
     }),
   },
+  optionalVoidArg: Schema.Void,
+  transformArgs: Schema.Struct({
+    foo: Schema.NumberFromString,
+  }),
   throwsError: Schema.Void,
   throwsErrorInsideTransaction: Schema.Void,
   throwsErrorAfterTransaction: Schema.Void,
@@ -68,20 +71,33 @@ const mutatorSchema = ZeroMutatorSchema.make({
 
 const zeroClient = ZeroClient.makeClient<ZeroSchema>();
 
-class DummyTag extends Context.Tag(prefixId("DummyTag"))<DummyTag, { dummy: string }>() {
-  static layer = Layer.succeed(DummyTag, { dummy: "dummy" });
-}
+const transformArgsClient = vi.fn(
+  Effect.fn(function* (a) {
+    yield* zeroClient.Transaction.use(async () => {});
+    return a;
+  }),
+);
 
-const clientMutators = mutatorSchema.makeClientMutators({
+const transformArgsServer = vi.fn(
+  Effect.fn(function* (a) {
+    yield* zeroServer.Transaction.use(async () => {});
+    return a;
+  }),
+);
+
+const clientMutators = mutatorSchema.makeMutators({
   messages: {
     create: Effect.fn(function* (msg) {
-      const { dummy } = yield* DummyTag;
-      yield* Effect.log(dummy);
       yield* zeroClient.Transaction.use(async (tx) => {
         await tx.mutate.messages.insert(msg);
       });
     }),
   },
+  /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
+  optionalVoidArg: Effect.fn(function* (a) {}),
+  transformArgs: Effect.fn(function* (a) {
+    return yield* transformArgsClient(a);
+  }),
   throwsError: Effect.fn(function* () {}),
   throwsErrorInsideTransaction: Effect.fn(function* () {}),
   throwsErrorAfterTransaction: Effect.fn(function* () {}),
@@ -93,12 +109,16 @@ const clientMutators = mutatorSchema.makeClientMutators({
   concurrentTransactions: Effect.fn(function* () {}),
 });
 
-const serverMutators = mutatorSchema.makeServerMutators({
+const serverMutators = mutatorSchema.makeMutators({
   messages: {
     create: Effect.fn(function* (msg) {
       yield* clientMutators.messages.create(msg).pipe(zeroServer.Transaction.execute);
     }),
   },
+  optionalVoidArg: Effect.fn(function* () {}),
+  transformArgs: Effect.fn(function* (a) {
+    return yield* transformArgsServer(a).pipe(zeroServer.Transaction.execute);
+  }),
   throwsError: Effect.fn(function* () {
     yield* Effect.void;
     throw new Error("error in throwsError");
@@ -177,7 +197,7 @@ function waitForLastItem<A, E, R>(stream: Stream.Stream<A, E, R>) {
     stream,
     Stream.timeout(Duration.millis(100)),
     Stream.runLast,
-    Effect.map(Option.getOrThrow),
+    Effect.map(Option.getOrThrowWith(() => new Error("No items received from server"))),
     Effect.scoped,
   );
 }
@@ -266,6 +286,42 @@ test("processPush has no extra requirements", () => {
   const effect = zeroServer.processPush(serverMutators, {} as any, {} as any);
 
   expectTypeOf<Effect.Effect.Context<typeof effect>>().toEqualTypeOf<never>();
+});
+
+test("mutators should have correct argument types", () => {
+  expectTypeOf<Parameters<typeof clientMutators.optionalVoidArg>>().toEqualTypeOf<[(void | undefined)?]>();
+  expectTypeOf<Parameters<typeof clientMutators.throwsError>>().toEqualTypeOf<[]>();
+  expectTypeOf<Parameters<typeof clientMutators.messages.create>>().toEqualTypeOf<
+    [Schema.Schema.Type<typeof mutatorSchema.schema.messages.create>]
+  >();
+});
+
+test("mutator requirements should propagate", () => {
+  class DummyTag extends Effect.Service<DummyTag>()(prefixId("DummyTag"), {
+    succeed: {},
+  }) {}
+
+  class DummyTag2 extends Effect.Service<DummyTag2>()(prefixId("DummyTag2"), {
+    succeed: {},
+  }) {}
+
+  const mutatorSchema = ZeroMutatorSchema.make({
+    dummy: Schema.Void,
+    dummy2: Schema.Void,
+  });
+  const mutators = mutatorSchema.makeMutators({
+    dummy: Effect.fn(function* () {
+      yield* DummyTag;
+    }),
+    dummy2: Effect.fn(function* () {
+      yield* DummyTag2;
+    }),
+  });
+  const clientEffect = zeroClient.unwrapMutators(mutators);
+  const serverEffect = zeroServer.processPush(mutators, {} as any, {} as any);
+
+  expectTypeOf<Effect.Effect.Context<typeof clientEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
+  expectTypeOf<Effect.Effect.Context<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
 
 test("rows are returned after data is inserted", async () => {
@@ -362,6 +418,20 @@ test("custom mutators work", async () => {
   expect(result.slice()).toEqual([item]);
 });
 
+test("schema validation is applied to mutator arguments", async () => {
+  expectTypeOf<Parameters<typeof z.mutate.transformArgs>>().toEqualTypeOf<
+    [Schema.Schema.Encoded<typeof mutatorSchema.schema.transformArgs>]
+  >();
+  expectTypeOf<Parameters<typeof clientMutators.transformArgs>>().toEqualTypeOf<
+    [Schema.Schema.Type<typeof mutatorSchema.schema.transformArgs>]
+  >();
+
+  await z.mutate.transformArgs({ foo: "1" }).server;
+
+  expect(transformArgsClient).toBeCalledWith({ foo: 1 });
+  expect(transformArgsServer).toBeCalledWith({ foo: 1 });
+});
+
 test("mutator that throws error should reject", async () => {
   expect(z.mutate.throwsError().server).rejects.toEqual({
     error: "app",
@@ -428,8 +498,25 @@ test("out of order mutations should be rejected", async () => {
   expect(lastResponse).toHaveProperty(["mutations", 0, "result", "error"], "oooMutation");
 });
 
-test.skip("non-existing mutator should reject", async () => {
-  expect((z.mutate as any).nonExistingMutator().server).rejects.toEqual({
+test("non-existing mutator should reject", async () => {
+  const mutatorSchema = ZeroMutatorSchema.make({
+    nonExistingMutator: Schema.Void,
+  });
+  const clientMutators = mutatorSchema.makeMutators({
+    nonExistingMutator: Effect.fn(function* () {}),
+  });
+  const z = new Zero({
+    userID: "anon",
+    server: "http://localhost:4848",
+    schema,
+    mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
+    push: {
+      url: "http://localhost:3001/push",
+    },
+    onError,
+  });
+
+  expect(z.mutate.nonExistingMutator().server).rejects.toEqual({
     error: "app",
     details: "Internal error",
   });

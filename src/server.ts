@@ -15,7 +15,7 @@ import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import type { AnyZeroMutators, ExtractMutatorSchemaRequirements } from "./mutators";
+import type { AnyMutatorDefs, ExtractMutatorDefsRequirements } from "./mutators";
 import {
   type ZeroAppError,
   type ZeroError,
@@ -122,7 +122,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
     }
   });
 
-  const processPush = Effect.fn(function* <T extends AnyZeroMutators>(
+  const processPush = Effect.fn(function* <T extends AnyMutatorDefs>(
     mutators: T,
     params: ZeroPushParams,
     request: ZeroPushBody,
@@ -137,7 +137,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
           if (mutation.type !== "custom") {
             return yield* new CustomMutationExpectedError({});
           }
-          return yield* processMutation<ExtractMutatorSchemaRequirements<T>>(mutators, mutation).pipe(
+          return yield* processMutation<ExtractMutatorDefsRequirements<T>>(mutators, mutation).pipe(
             Effect.map((result) =>
               ZeroMutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
             ),
@@ -163,7 +163,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
 
   /** @internal */
   const processMutation = Effect.fn(
-    function* <R>(mutators: AnyZeroMutators<R>, mutation: ZeroMutation) {
+    function* <R>(mutators: AnyMutatorDefs<R>, mutation: ZeroMutation) {
       // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
       const [namespace, name] = mutation.name.includes("|")
         ? Str.split(mutation.name, "|")

@@ -1,5 +1,5 @@
 import { Atom } from "@effect-atom/atom";
-import type { HumanReadable, Query, ReadonlyJSONValue, Schema, Transaction } from "@rocicorp/zero";
+import type { HumanReadable, Query, ReadonlyJSONValue, Schema as ZeroSchema, Transaction } from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -12,7 +12,8 @@ import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { AnyZeroMutators, ExtractMutatorSchemaRequirements } from "./mutators";
+import type * as Schema from "effect/Schema";
+import type { AnyZeroMutators, ExtractMutatorDefsRequirements, ZeroMutator, AnyMutatorDef } from "./mutators";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot";
 import { prefixId } from "./utils";
 
@@ -22,7 +23,7 @@ export interface ZeroClientTransaction {
   readonly _tag: unique symbol;
 }
 
-export const makeClient = <S extends Schema>() => {
+export const makeClient = <S extends ZeroSchema>() => {
   // TODO: Maybe prefix this / suffix this with a tag passed in to `make`?
   const ZeroClientTransaction = Context.Tag(prefixId("ZeroClientTransaction"))<ZeroClientTransaction, Transaction<S>>();
 
@@ -36,25 +37,21 @@ export const makeClient = <S extends Schema>() => {
       Effect.mapError((cause) => new ZeroClientTransactionError({ cause })),
     );
 
-  const unwrapMutators = <T extends AnyZeroMutators>(mutators: T) => {
-    return Effect.gen(function* () {
-      const runtime = yield* Effect.runtime<Exclude<ExtractMutatorSchemaRequirements<T>, ZeroClientTransaction>>();
+  const unwrapMutators = Effect.fn(function* <T extends AnyZeroMutators>(mutators: T) {
+    const runtime = yield* Effect.runtime<Exclude<ExtractMutatorDefsRequirements<T>, ZeroClientTransaction>>();
 
-      function unwrapMutator(
-        mutator: (args: unknown) => Effect.Effect<void, unknown, ExtractMutatorSchemaRequirements<T>>,
-      ) {
-        return (tx: Transaction<S>, args: unknown) => {
-          return mutator(args).pipe(Effect.provideService(ZeroClientTransaction, tx), (effect) =>
-            Runtime.runPromise(runtime, effect),
-          );
-        };
-      }
+    function unwrapMutator(
+      mutator: (args: unknown) => Effect.Effect<void, unknown, ExtractMutatorDefsRequirements<T>>,
+    ) {
+      return (tx: Transaction<S>, args: unknown) => {
+        return mutator(args).pipe(Effect.provideService(ZeroClientTransaction, tx), Runtime.runPromise(runtime));
+      };
+    }
 
-      return Rec.map(mutators, (v) =>
-        Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
-      ) as UnwrappedMutatorSchema<S, T>;
-    });
-  };
+    return Rec.map(mutators, (v) =>
+      Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
+    ) as UnwrappedMutatorSchema<S, T>;
+  });
 
   const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) {
     const view = yield* Effect.acquireRelease(
@@ -99,8 +96,8 @@ export const makeClient = <S extends Schema>() => {
   };
 };
 
-export type UnwrappedMutatorSchema<S extends Schema, T extends AnyZeroMutators> = {
-  [A in keyof T]: T[A] extends (...args: infer TArgs) => unknown
+export type UnwrappedMutatorSchema<S extends ZeroSchema, T extends AnyZeroMutators> = {
+  [A in keyof T]: T[A] extends { _inArgs: infer TArgs extends any[] }
     ? (transaction: Transaction<S>, ...args: TArgs) => Promise<void>
     : {
         [B in keyof T[A]]: T[A][B] extends (...args: infer TArgs) => unknown
