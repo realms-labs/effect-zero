@@ -381,5 +381,5 @@ export class ZeroMutationUserError extends Data.TaggedError("ZeroMutationUserErr
 class ZeroArgsServerValidationError extends Data.TaggedError("ZeroArgsServerValidationError")<{
   cause: Cause.Cause<unknown>;
 }> {
-  message = "Server mutator arguments validation failed";
+  override message = "Server mutator arguments validation failed";
 }
