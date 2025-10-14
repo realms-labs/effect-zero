@@ -124,7 +124,7 @@ export const ZeroArgsClientValidationErrorTypeId = Symbol.for(prefixId("ZeroArgs
 export class ZeroArgsClientValidationError extends Data.TaggedError("ZeroArgsClientValidationError")<{
   cause: Cause.Cause<unknown>;
 }> {
-  message = "Client mutator arguments validation failed";
+  override message = "Client mutator arguments validation failed";
 
   readonly [ZeroArgsClientValidationErrorTypeId] = ZeroArgsClientValidationErrorTypeId;
 
