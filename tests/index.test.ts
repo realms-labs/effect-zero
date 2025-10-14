@@ -1,6 +1,8 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: allowed in tests */
 /** biome-ignore-all lint/style/noNonNullAssertion: allowed in tests */
 /** biome-ignore-all lint/suspicious/noConfusingVoidType: allowed in tests */
+// @effect-diagnostics importFromBarrel:off
+// @effect-diagnostics missingReturnYieldStar:off
 
 import dotenv from "dotenv";
 
