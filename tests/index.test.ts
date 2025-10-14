@@ -31,7 +31,7 @@ import {
 import { nanoid } from "nanoid";
 import postgres from "postgres";
 import * as ZeroClient from "../src/client";
-import { ZeroMutatorSchema } from "../src/mutators";
+import { MutatorSchema } from "../src/mutators";
 import * as ZeroServer from "../src/server";
 import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "../src/types";
 import { prefixId } from "../src/utils";
@@ -47,7 +47,7 @@ const ddb = drizzle(rawDb);
 const connection = new PostgresJSConnection(rawDb);
 const database = new ZQLDatabase(connection, schema);
 
-const mutatorSchema = ZeroMutatorSchema.make({
+const mutatorSchema = MutatorSchema.make({
   messages: {
     create: Schema.Struct({
       id: Schema.String,
@@ -61,6 +61,7 @@ const mutatorSchema = ZeroMutatorSchema.make({
   throwsError: Schema.Void,
   throwsErrorInsideTransaction: Schema.Void,
   throwsErrorAfterTransaction: Schema.Void,
+  clientThrowsError: Schema.Void,
   yieldsError: Schema.Void,
   yieldsErrorInsideTransaction: Schema.Void,
   yieldsErrorAfterTransaction: Schema.Void,
@@ -101,6 +102,10 @@ const clientMutators = mutatorSchema.makeMutators({
   throwsError: Effect.fn(function* () {}),
   throwsErrorInsideTransaction: Effect.fn(function* () {}),
   throwsErrorAfterTransaction: Effect.fn(function* () {}),
+  clientThrowsError: Effect.fn(function* () {
+    yield* Effect.void;
+    throw new Error("client error");
+  }),
   yieldsError: Effect.fn(function* () {}),
   yieldsErrorInsideTransaction: Effect.fn(function* () {}),
   yieldsErrorAfterTransaction: Effect.fn(function* () {}),
@@ -134,6 +139,7 @@ const serverMutators = mutatorSchema.makeMutators({
     }).pipe(zeroServer.Transaction.execute);
     throw new Error("error in throwsErrorAfterTransaction");
   }),
+  clientThrowsError: Effect.fn(function* () {}),
   yieldsError: Effect.fn(function* () {
     yield* Effect.fail(new Error("error in yieldsError"));
   }),
@@ -240,7 +246,7 @@ beforeAll(async () => {
       Layer.provide(BunHttpServer.layer({ port: 3000 })),
       Layer.tap(() => serverStarted.open),
     );
-    yield* Layer.launch(app).pipe(Effect.tap(Console.log("server closed")), Effect.forkDaemon);
+    yield* Layer.launch(app).pipe(Effect.forkDaemon);
     yield* serverStarted.await;
   }).pipe(Effect.provide(FetchHttpClient.layer));
 
@@ -305,7 +311,7 @@ test("mutator requirements should propagate", () => {
     succeed: {},
   }) {}
 
-  const mutatorSchema = ZeroMutatorSchema.make({
+  const mutatorSchema = MutatorSchema.make({
     dummy: Schema.Void,
     dummy2: Schema.Void,
   });
@@ -419,6 +425,12 @@ test("custom mutators work", async () => {
 });
 
 test("schema validation is applied to mutator arguments", async () => {
+  await z.mutate.messages.create({} as any).server.catch((e) => {
+    expect(e).toSatisfy(ZeroClient.ZeroArgsClientValidationError.is);
+  });
+});
+
+test("schema transformations are applied to mutator arguments", async () => {
   expectTypeOf<Parameters<typeof z.mutate.transformArgs>>().toEqualTypeOf<
     [Schema.Schema.Encoded<typeof mutatorSchema.schema.transformArgs>]
   >();
@@ -448,6 +460,10 @@ test("mutator that throws error inside transaction should reject", async () => {
 
 test("mutator that throws error after transaction should resolve", async () => {
   expect(z.mutate.throwsErrorAfterTransaction().server).resolves.toBeDefined();
+});
+
+test("client mutator that throws error should reject", async () => {
+  await expect(z.mutate.clientThrowsError().server).rejects.toThrowError("client error");
 });
 
 test("mutator that yields error should reject", async () => {
@@ -499,7 +515,7 @@ test("out of order mutations should be rejected", async () => {
 });
 
 test("non-existing mutator should reject", async () => {
-  const mutatorSchema = ZeroMutatorSchema.make({
+  const mutatorSchema = MutatorSchema.make({
     nonExistingMutator: Schema.Void,
   });
   const clientMutators = mutatorSchema.makeMutators({
@@ -511,7 +527,7 @@ test("non-existing mutator should reject", async () => {
     schema,
     mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
     push: {
-      url: "http://localhost:3001/push",
+      url: "http://localhost:3000/push",
     },
     onError,
   });

@@ -15,7 +15,7 @@ import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import type { AnyMutatorDefs, ExtractMutatorDefsRequirements } from "./mutators";
+import { MutatorArgsSchemaSym, type AnyMutators, type ExtractMutatorsRequirements } from "./mutators";
 import {
   type ZeroAppError,
   type ZeroError,
@@ -27,6 +27,7 @@ import {
   type ZeroPushResponse,
 } from "./types";
 import { prefixId } from "./utils";
+import * as Schema from "effect/Schema";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
@@ -122,7 +123,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
     }
   });
 
-  const processPush = Effect.fn(function* <T extends AnyMutatorDefs>(
+  const processPush = Effect.fn(function* <T extends AnyMutators>(
     mutators: T,
     params: ZeroPushParams,
     request: ZeroPushBody,
@@ -137,7 +138,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
           if (mutation.type !== "custom") {
             return yield* new CustomMutationExpectedError({});
           }
-          return yield* processMutation<ExtractMutatorDefsRequirements<T>>(mutators, mutation).pipe(
+          return yield* processMutation<ExtractMutatorsRequirements<T>>(mutators, mutation).pipe(
             Effect.map((result) =>
               ZeroMutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
             ),
@@ -163,7 +164,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
 
   /** @internal */
   const processMutation = Effect.fn(
-    function* <R>(mutators: AnyMutatorDefs<R>, mutation: ZeroMutation) {
+    function* <R>(mutators: AnyMutators<R>, mutation: ZeroMutation) {
       // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
       const [namespace, name] = mutation.name.includes("|")
         ? Str.split(mutation.name, "|")
@@ -181,7 +182,12 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         Effect.catchTag("NoSuchElementException", () => new MutatorNotFoundError({ mutationName: mutation.name })),
       );
 
-      return yield* mutator(mutation.args[0]).pipe(
+      return yield* Effect.andThen(
+        Schema.decode(mutator[MutatorArgsSchemaSym])(mutation.args[0]).pipe(
+          Effect.catchTag("ParseError", (e) => new ZeroArgsServerValidationError({ cause: Cause.fail(e) })),
+        ),
+        mutator,
+      ).pipe(
         // Case #2 "One transaction then fail"
         // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
         Effect.catchAllCause(
@@ -370,4 +376,10 @@ export class ZeroMutationUserError extends Data.TaggedError("ZeroMutationUserErr
     const err = Cause.squash(this.cause);
     return err instanceof Error ? err.message : "exception was not of type `Error`";
   }
+}
+
+class ZeroArgsServerValidationError extends Data.TaggedError("ZeroArgsServerValidationError")<{
+  cause: Cause.Cause<unknown>;
+}> {
+  message = "Server mutator arguments validation failed";
 }

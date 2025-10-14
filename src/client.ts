@@ -1,7 +1,7 @@
 import { Atom } from "@effect-atom/atom";
 import type { HumanReadable, Query, ReadonlyJSONValue, Schema as ZeroSchema, Transaction } from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
-import type * as Cause from "effect/Cause";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -12,10 +12,11 @@ import * as Runtime from "effect/Runtime";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type * as Schema from "effect/Schema";
-import type { AnyZeroMutators, ExtractMutatorDefsRequirements, ZeroMutator, AnyMutatorDef } from "./mutators";
+import * as Schema from "effect/Schema";
+import { type AnyMutators, type ExtractMutatorsRequirements, type AnyMutator, MutatorArgsSchemaSym } from "./mutators";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot";
 import { prefixId } from "./utils";
+import * as Exit from "effect/Exit";
 
 // Updated to: https://github.com/rocicorp/mono/blob/2e18f2e1d084c530ebd9bd7fef9bb848e607cc19/packages/zero-pg/src/push-processor.ts
 
@@ -37,20 +38,27 @@ export const makeClient = <S extends ZeroSchema>() => {
       Effect.mapError((cause) => new ZeroClientTransactionError({ cause })),
     );
 
-  const unwrapMutators = Effect.fn(function* <T extends AnyZeroMutators>(mutators: T) {
-    const runtime = yield* Effect.runtime<Exclude<ExtractMutatorDefsRequirements<T>, ZeroClientTransaction>>();
+  const unwrapMutators = Effect.fn(function* <T extends AnyMutators>(mutators: T) {
+    const runtime = yield* Effect.runtime<Exclude<ExtractMutatorsRequirements<T>, ZeroClientTransaction>>();
 
-    function unwrapMutator(
-      mutator: (args: unknown) => Effect.Effect<void, unknown, ExtractMutatorDefsRequirements<T>>,
-    ) {
-      return (tx: Transaction<S>, args: unknown) => {
-        return mutator(args).pipe(Effect.provideService(ZeroClientTransaction, tx), Runtime.runPromise(runtime));
+    function unwrapMutator<E>(mutator: AnyMutator<ExtractMutatorsRequirements<T>, E>) {
+      return async (tx: Transaction<S>, args: unknown) => {
+        const exit = await Effect.andThen(
+          Schema.decode(mutator[MutatorArgsSchemaSym])(args).pipe(
+            Effect.catchTag("ParseError", (e) => new ZeroArgsClientValidationError({ cause: Cause.fail(e) })),
+          ),
+          mutator,
+        ).pipe(Effect.provideService(ZeroClientTransaction, tx), Runtime.runPromiseExit(runtime));
+        return Exit.getOrElse(exit, (c) => {
+          // Extract underlying error bypassing FiberFailure
+          throw Cause.squash(c);
+        });
       };
     }
 
     return Rec.map(mutators, (v) =>
       Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
-    ) as UnwrappedMutatorSchema<S, T>;
+    ) as UnwrapMutators<S, T>;
   });
 
   const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) {
@@ -96,16 +104,31 @@ export const makeClient = <S extends ZeroSchema>() => {
   };
 };
 
-export type UnwrappedMutatorSchema<S extends ZeroSchema, T extends AnyZeroMutators> = {
-  [A in keyof T]: T[A] extends { _inArgs: infer TArgs extends any[] }
-    ? (transaction: Transaction<S>, ...args: TArgs) => Promise<void>
+type UnwrapMutator<S extends ZeroSchema, T extends AnyMutator> = Parameters<T> extends []
+  ? (transaction: Transaction<S>) => Promise<void>
+  : (transaction: Transaction<S>, args: Schema.Schema.Encoded<T[typeof MutatorArgsSchemaSym]>) => Promise<void>;
+
+export type UnwrapMutators<S extends ZeroSchema, T extends AnyMutators> = {
+  [A in keyof T]: T[A] extends AnyMutator
+    ? UnwrapMutator<S, T[A]>
     : {
-        [B in keyof T[A]]: T[A][B] extends (...args: infer TArgs) => unknown
-          ? (transaction: Transaction<S>, ...args: TArgs) => Promise<void>
-          : never;
+        [B in keyof T[A]]: T[A][B] extends AnyMutator ? UnwrapMutator<S, T[A][B]> : never;
       };
 } & {};
 
-class ZeroClientTransactionError extends Data.TaggedError("ZeroClientTransactionError")<{
+export class ZeroClientTransactionError extends Data.TaggedError("ZeroClientTransactionError")<{
   cause: Cause.Cause<unknown>;
 }> {}
+
+export const ZeroArgsClientValidationErrorTypeId = Symbol.for(prefixId("ZeroArgsClientValidationError"));
+export class ZeroArgsClientValidationError extends Data.TaggedError("ZeroArgsClientValidationError")<{
+  cause: Cause.Cause<unknown>;
+}> {
+  message = "Client mutator arguments validation failed";
+
+  readonly [ZeroArgsClientValidationErrorTypeId] = ZeroArgsClientValidationErrorTypeId;
+
+  static is(e: unknown): e is ZeroArgsClientValidationError {
+    return Predicate.hasProperty(e, ZeroArgsClientValidationErrorTypeId);
+  }
+}
