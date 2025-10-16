@@ -426,7 +426,7 @@ test("custom mutators work", async () => {
   expect(result.slice()).toEqual([item]);
 });
 
-test.only("schema validation is applied to mutator arguments", async () => {
+test("schema validation is applied to mutator arguments", async () => {
   const mut = z.mutate.messages.create({} as any);
   await mut.client.catch((e) => {
     expect(e).toSatisfy(ZeroClient.ZeroArgsClientValidationError.is);
@@ -468,7 +468,7 @@ test("mutator that throws error after transaction should resolve", async () => {
   expect(z.mutate.throwsErrorAfterTransaction().server).resolves.toBeDefined();
 });
 
-test.only("client mutator that throws error should reject", async () => {
+test("client mutator that throws error should reject", async () => {
   const mut = z.mutate.clientThrowsError();
 
   await Promise.allSettled([mut.client, mut.server]);
