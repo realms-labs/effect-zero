@@ -30,6 +30,7 @@ import {
   Stream,
   Subscribable,
 } from "effect";
+import * as Predicate from "effect/Predicate";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
 import * as ZeroClient from "../src/client";
@@ -429,10 +430,10 @@ test("custom mutators work", async () => {
 test("schema validation is applied to mutator arguments", async () => {
   const mut = z.mutate.messages.create({} as any);
   await mut.client.catch((e) => {
-    expect(e).toSatisfy(ZeroClient.ZeroArgsClientValidationError.is);
+    expect(e).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
   });
   await mut.server.catch((e) => {
-    expect(e).toSatisfy(ZeroClient.ZeroArgsClientValidationError.is);
+    expect(e).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
   });
 });
 
@@ -473,8 +474,8 @@ test("client mutator that throws error should reject", async () => {
 
   await Promise.allSettled([mut.client, mut.server]);
 
-  expect(mut.client).rejects.toThrowError("client error")
-  expect(mut.server).rejects.toThrowError("client error")
+  expect(mut.client).rejects.toThrowError("client error");
+  expect(mut.server).rejects.toThrowError("client error");
 });
 
 test("mutator that yields error should reject", async () => {

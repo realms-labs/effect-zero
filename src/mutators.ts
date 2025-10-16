@@ -11,11 +11,7 @@ export type AnyMutatorDef<R = any, TArgs extends any[] = any[]> = (...args: TArg
 
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
 export type AnyMutatorDefs<R = any> = {
-  [K: string]:
-    | AnyMutatorDef<R>
-    | {
-        [K: string]: AnyMutatorDef<R>;
-      };
+  [K: string]: AnyMutatorDef<R> | { [K: string]: AnyMutatorDef<R> };
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
@@ -26,9 +22,7 @@ export type MutatorDefs<TSchema extends AnyMutatorSchema> = {
   [K in keyof TSchema]: TSchema[K] extends AnyMutatorSchemaArgs
     ? AnyMutatorDef<unknown, [Schema.Schema.Type<TSchema[K]>]>
     : TSchema[K] extends infer TSchema extends Record<string, AnyMutatorSchemaArgs>
-      ? {
-          [K in keyof TSchema]: AnyMutatorDef<unknown, [Schema.Schema.Type<TSchema[K]>]>;
-        }
+      ? { [K in keyof TSchema]: AnyMutatorDef<unknown, [Schema.Schema.Type<TSchema[K]>]> }
       : never;
 };
 
@@ -48,9 +42,7 @@ export type Mutators<TSchema extends AnyMutatorSchema, TDefs extends AnyMutatorD
       : never
     : TSchema[K] extends infer TSchema extends Record<string, AnyMutatorSchemaArgs>
       ? TDefs[K] extends infer TDefs extends Record<string, AnyMutatorDef>
-        ? {
-            [K in keyof TDefs & keyof TSchema]: Mutator<TDefs[K], TSchema[K]>;
-          }
+        ? { [K in keyof TDefs & keyof TSchema]: Mutator<TDefs[K], TSchema[K]> }
         : never
       : never;
 } & {};
