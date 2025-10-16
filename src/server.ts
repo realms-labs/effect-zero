@@ -9,6 +9,7 @@ import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
+import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
@@ -184,7 +185,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       );
 
       const args = yield* Schema.decode(mutator[MutatorArgsSchemaSym])(mutation.args[0]).pipe(
-        Effect.catchTag("ParseError", (e) => new ZeroArgsServerValidationError({ cause: Cause.fail(e) })),
+        Effect.catchTag("ParseError", (e) => new ZeroServerArgsParseError({ cause: Cause.fail(e) })),
       );
 
       return yield* mutator(args).pipe(
@@ -378,8 +379,6 @@ export class ZeroMutationUserError extends Data.TaggedError("ZeroMutationUserErr
   }
 }
 
-class ZeroArgsServerValidationError extends Data.TaggedError("ZeroArgsServerValidationError")<{
-  cause: Cause.Cause<unknown>;
-}> {
-  override message = "Server mutator arguments validation failed";
-}
+class ZeroServerArgsParseError extends Data.TaggedError("ZeroServerArgsParseError")<{
+  cause: Cause.Cause<ParseResult.ParseError>;
+}> {}
