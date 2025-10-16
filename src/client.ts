@@ -1,25 +1,27 @@
 import { Atom } from "@effect-atom/atom";
-import type { HumanReadable, Query, ReadonlyJSONValue, Schema as ZeroSchema, Transaction } from "@rocicorp/zero";
+import type { HumanReadable, Query, ReadonlyJSONValue, Transaction, Schema as ZeroSchema } from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Match from "effect/Match";
+import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as Schema from "effect/Schema";
-import { type AnyMutators, type ExtractMutatorsRequirements, type AnyMutator, MutatorArgsSchemaSym } from "./mutators";
+import { type AnyMutator, type AnyMutators, type ExtractMutatorsRequirements, MutatorArgsSchemaSym } from "./mutators";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot";
 import { prefixId } from "./utils";
-import * as Exit from "effect/Exit";
 
 // Updated to: https://github.com/rocicorp/mono/blob/2e18f2e1d084c530ebd9bd7fef9bb848e607cc19/packages/zero-pg/src/push-processor.ts
 
+// Necessary workaround for TS declaration generation
 export interface ZeroClientTransaction {
   readonly _tag: unique symbol;
 }
@@ -29,7 +31,7 @@ export const makeClient = <S extends ZeroSchema>() => {
   const ZeroClientTransaction = Context.Tag(prefixId("ZeroClientTransaction"))<ZeroClientTransaction, Transaction<S>>();
 
   const use = <A>(fn: (transaction: Transaction<S>, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
-    Effect.andThen(ZeroClientTransaction, (transaction) =>
+    Effect.flatMap(ZeroClientTransaction, (transaction) =>
       Effect.promise((signal) => fn(transaction, { signal })),
     ).pipe(
       Effect.tapErrorCause((cause) => Effect.logError(cause)),
@@ -43,12 +45,12 @@ export const makeClient = <S extends ZeroSchema>() => {
 
     function unwrapMutator<E>(mutator: AnyMutator<ExtractMutatorsRequirements<T>, E>) {
       return async (tx: Transaction<S>, args: unknown) => {
-        const exit = await Effect.andThen(
-          Schema.decode(mutator[MutatorArgsSchemaSym])(args).pipe(
-            Effect.catchTag("ParseError", (e) => new ZeroArgsClientValidationError({ cause: Cause.fail(e) })),
-          ),
-          mutator,
-        ).pipe(Effect.provideService(ZeroClientTransaction, tx), Runtime.runPromiseExit(runtime));
+        const exit = await Schema.decode(mutator[MutatorArgsSchemaSym])(args).pipe(
+          Effect.catchTag("ParseError", (e) => new ZeroClientArgsParseError({ cause: Cause.fail(e) })),
+          Effect.flatMap(mutator),
+          Effect.provideService(ZeroClientTransaction, tx),
+          Runtime.runPromiseExit(runtime),
+        );
         return Exit.getOrElse(exit, (c) => {
           // Extract underlying error bypassing FiberFailure
           throw Cause.squash(c);
@@ -111,24 +113,13 @@ type UnwrapMutator<S extends ZeroSchema, T extends AnyMutator> = Parameters<T> e
 export type UnwrapMutators<S extends ZeroSchema, T extends AnyMutators> = {
   [A in keyof T]: T[A] extends AnyMutator
     ? UnwrapMutator<S, T[A]>
-    : {
-        [B in keyof T[A]]: T[A][B] extends AnyMutator ? UnwrapMutator<S, T[A][B]> : never;
-      };
+    : { [B in keyof T[A]]: T[A][B] extends AnyMutator ? UnwrapMutator<S, T[A][B]> : never };
 } & {};
 
 export class ZeroClientTransactionError extends Data.TaggedError("ZeroClientTransactionError")<{
   cause: Cause.Cause<unknown>;
 }> {}
 
-export const ZeroArgsClientValidationErrorTypeId = Symbol.for(prefixId("ZeroArgsClientValidationError"));
-export class ZeroArgsClientValidationError extends Data.TaggedError("ZeroArgsClientValidationError")<{
-  cause: Cause.Cause<unknown>;
-}> {
-  override message = "Client mutator arguments validation failed";
-
-  readonly [ZeroArgsClientValidationErrorTypeId] = ZeroArgsClientValidationErrorTypeId;
-
-  static is(e: unknown): e is ZeroArgsClientValidationError {
-    return Predicate.hasProperty(e, ZeroArgsClientValidationErrorTypeId);
-  }
-}
+export class ZeroClientArgsParseError extends Data.TaggedError("ZeroClientArgsParseError")<{
+  cause: Cause.Cause<ParseResult.ParseError>;
+}> {}

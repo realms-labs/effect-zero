@@ -12,10 +12,11 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { MutatorArgsSchemaSym, type AnyMutators, type ExtractMutatorsRequirements } from "./mutators";
+import { type AnyMutators, type ExtractMutatorsRequirements, MutatorArgsSchemaSym } from "./mutators";
 import {
   type ZeroAppError,
   type ZeroError,
@@ -27,7 +28,6 @@ import {
   type ZeroPushResponse,
 } from "./types";
 import { prefixId } from "./utils";
-import * as Schema from "effect/Schema";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
@@ -90,7 +90,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
   }, ZeroServerMutationContext.guard);
 
   const use = <A>(fn: (transaction: T, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
-    Effect.andThen(ZeroServerTransactionContext, (ctx) =>
+    Effect.flatMap(ZeroServerTransactionContext, (ctx) =>
       Effect.tryPromise({
         try: (signal) => fn(ctx.transaction, { signal }),
         catch: Fn.identity,
@@ -169,6 +169,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       const [namespace, name] = mutation.name.includes("|")
         ? Str.split(mutation.name, "|")
         : Str.split(mutation.name, ".");
+
       const mutator = yield* Fn.pipe(
         mutators,
         Rec.get<string>(namespace),
@@ -182,12 +183,11 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         Effect.catchTag("NoSuchElementException", () => new MutatorNotFoundError({ mutationName: mutation.name })),
       );
 
-      return yield* Effect.andThen(
-        Schema.decode(mutator[MutatorArgsSchemaSym])(mutation.args[0]).pipe(
-          Effect.catchTag("ParseError", (e) => new ZeroArgsServerValidationError({ cause: Cause.fail(e) })),
-        ),
-        mutator,
-      ).pipe(
+      const args = yield* Schema.decode(mutator[MutatorArgsSchemaSym])(mutation.args[0]).pipe(
+        Effect.catchTag("ParseError", (e) => new ZeroArgsServerValidationError({ cause: Cause.fail(e) })),
+      );
+
+      return yield* mutator(args).pipe(
         // Case #2 "One transaction then fail"
         // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
         Effect.catchAllCause(
