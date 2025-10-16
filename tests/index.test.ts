@@ -471,18 +471,10 @@ test("mutator that throws error after transaction should resolve", async () => {
 test.only("client mutator that throws error should reject", async () => {
   const mut = z.mutate.clientThrowsError();
 
-  // ideally this should have worked
-  // await Promise.allSettled([
-  //   expect(mut.client).rejects.toThrowError("client error"),
-  //   expect(mut.server).rejects.toThrowError("client error"),
-  // ]);
+  await Promise.allSettled([mut.client, mut.server]);
 
-  const [clientErr, serverErr] = await Promise.allSettled([mut.client, mut.server]);
-
-  expect(clientErr.status).toBe("rejected");
-  expect((clientErr as PromiseRejectedResult).reason.message).toBe("client error");
-  expect(serverErr.status).toBe("rejected");
-  expect((serverErr as PromiseRejectedResult).reason.message).toBe("client error");
+  expect(mut.client).rejects.toThrowError("client error")
+  expect(mut.server).rejects.toThrowError("client error")
 });
 
 test("mutator that yields error should reject", async () => {
