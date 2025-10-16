@@ -426,8 +426,12 @@ test("custom mutators work", async () => {
   expect(result.slice()).toEqual([item]);
 });
 
-test.skip("schema validation is applied to mutator arguments", async () => {
-  await z.mutate.messages.create({} as any).server.catch((e) => {
+test.only("schema validation is applied to mutator arguments", async () => {
+  const mut = z.mutate.messages.create({} as any);
+  await mut.client.catch((e) => {
+    expect(e).toSatisfy(ZeroClient.ZeroArgsClientValidationError.is);
+  });
+  await mut.server.catch((e) => {
     expect(e).toSatisfy(ZeroClient.ZeroArgsClientValidationError.is);
   });
 });
@@ -464,8 +468,21 @@ test("mutator that throws error after transaction should resolve", async () => {
   expect(z.mutate.throwsErrorAfterTransaction().server).resolves.toBeDefined();
 });
 
-test.skip("client mutator that throws error should reject", async () => {
-  await expect(z.mutate.clientThrowsError().server).rejects.toThrowError("client error");
+test.only("client mutator that throws error should reject", async () => {
+  const mut = z.mutate.clientThrowsError();
+
+  // ideally this should have worked
+  // await Promise.allSettled([
+  //   expect(mut.client).rejects.toThrowError("client error"),
+  //   expect(mut.server).rejects.toThrowError("client error"),
+  // ]);
+
+  const [clientErr, serverErr] = await Promise.allSettled([mut.client, mut.server]);
+
+  expect(clientErr.status).toBe("rejected");
+  expect((clientErr as PromiseRejectedResult).reason.message).toBe("client error");
+  expect(serverErr.status).toBe("rejected");
+  expect((serverErr as PromiseRejectedResult).reason.message).toBe("client error");
 });
 
 test("mutator that yields error should reject", async () => {
