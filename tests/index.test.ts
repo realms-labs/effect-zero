@@ -1,16 +1,22 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: allowed in tests */
 /** biome-ignore-all lint/style/noNonNullAssertion: allowed in tests */
 /** biome-ignore-all lint/suspicious/noConfusingVoidType: allowed in tests */
+// @effect-diagnostics importFromBarrel:off
+// @effect-diagnostics missingReturnYieldStar:off
 
 import dotenv from "dotenv";
+
 dotenv.config({ path: "tests/.env", quiet: true });
 
-import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
 import { beforeAll, beforeEach, expect, expectTypeOf, test, vi } from "bun:test";
-import postgres from "postgres";
-import { schema, type Schema as ZeroSchema } from "./schema";
-import * as ZeroServer from "../src/server";
-import * as ZeroClient from "../src/client";
+import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
+import { BunHttpServer } from "@effect/platform-bun";
+import { Atom, Registry, Result } from "@effect-atom/atom";
+import { Zero } from "@rocicorp/zero";
+import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
+import { createSessionStorage } from "bun-storage";
+import { count } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
 import {
   Chunk,
   Console,
@@ -24,16 +30,16 @@ import {
   Stream,
   Subscribable,
 } from "effect";
-import { Zero } from "@rocicorp/zero";
-import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
-import { BunHttpServer } from "@effect/platform-bun";
-import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "../src/types";
-import { drizzle } from "drizzle-orm/postgres-js";
-import { count } from "drizzle-orm";
-import { messages } from "./drizzle.schema";
+import * as Predicate from "effect/Predicate";
 import { nanoid } from "nanoid";
-import { Atom, Registry, Result } from "@effect-atom/atom";
-import { createSessionStorage } from "bun-storage";
+import postgres from "postgres";
+import * as ZeroClient from "../src/client";
+import { MutatorSchema } from "../src/mutators";
+import * as ZeroServer from "../src/server";
+import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "../src/types";
+import { prefixId } from "../src/utils";
+import { messages } from "./drizzle.schema";
+import { schema, type Schema as ZeroSchema } from "./schema";
 import type { Message } from "./schema.gen";
 
 const [sessionStorage] = createSessionStorage();
@@ -44,108 +50,138 @@ const ddb = drizzle(rawDb);
 const connection = new PostgresJSConnection(rawDb);
 const database = new ZQLDatabase(connection, schema);
 
-type MutatorArgs = {
+const mutatorSchema = MutatorSchema.make({
   messages: {
-    create: Message;
-    throwsError: void;
-    throwsErrorInsideTransaction: void;
-    throwsErrorAfterTransaction: void;
-    yieldsError: void;
-    yieldsErrorInsideTransaction: void;
-    yieldsErrorAfterTransaction: void;
-    noTransaction: void;
-    doubleTransaction: void;
-    concurrentTransactions: void;
-  };
-};
+    create: Schema.Struct({
+      id: Schema.String,
+      body: Schema.String,
+    }),
+  },
+  optionalVoidArg: Schema.Void,
+  transformArgs: Schema.Struct({
+    foo: Schema.NumberFromString,
+  }),
+  throwsError: Schema.Void,
+  throwsErrorInsideTransaction: Schema.Void,
+  throwsErrorAfterTransaction: Schema.Void,
+  clientThrowsError: Schema.Void,
+  yieldsError: Schema.Void,
+  yieldsErrorInsideTransaction: Schema.Void,
+  yieldsErrorAfterTransaction: Schema.Void,
+  noTransaction: Schema.Void,
+  doubleTransaction: Schema.Void,
+  concurrentTransactions: Schema.Void,
+});
 
 const zeroClient = ZeroClient.makeClient<ZeroSchema>();
+
+const transformArgsClient = vi.fn(
+  Effect.fn(function* (a) {
+    yield* zeroClient.Transaction.use(async () => {});
+    return a;
+  }),
+);
+
+const transformArgsServer = vi.fn(
+  Effect.fn(function* (a) {
+    yield* zeroServer.Transaction.use(async () => {});
+    return a;
+  }),
+);
+
+const clientMutators = mutatorSchema.makeMutators({
+  messages: {
+    create: Effect.fn(function* (msg) {
+      yield* zeroClient.Transaction.use(async (tx) => {
+        await tx.mutate.messages.insert(msg);
+      });
+    }),
+  },
+  /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
+  optionalVoidArg: Effect.fn(function* (a) {}),
+  transformArgs: Effect.fn(function* (a) {
+    return yield* transformArgsClient(a);
+  }),
+  throwsError: Effect.fn(function* () {}),
+  throwsErrorInsideTransaction: Effect.fn(function* () {}),
+  throwsErrorAfterTransaction: Effect.fn(function* () {}),
+  clientThrowsError: Effect.fn(function* () {
+    yield* Effect.void;
+    throw new Error("client error");
+  }),
+  yieldsError: Effect.fn(function* () {}),
+  yieldsErrorInsideTransaction: Effect.fn(function* () {}),
+  yieldsErrorAfterTransaction: Effect.fn(function* () {}),
+  noTransaction: Effect.fn(function* () {}),
+  doubleTransaction: Effect.fn(function* () {}),
+  concurrentTransactions: Effect.fn(function* () {}),
+});
+
+const serverMutators = mutatorSchema.makeMutators({
+  messages: {
+    create: Effect.fn(function* (msg) {
+      yield* clientMutators.messages.create(msg).pipe(zeroServer.Transaction.execute);
+    }),
+  },
+  optionalVoidArg: Effect.fn(function* () {}),
+  transformArgs: Effect.fn(function* (a) {
+    return yield* transformArgsServer(a).pipe(zeroServer.Transaction.execute);
+  }),
+  throwsError: Effect.fn(function* () {
+    yield* Effect.void;
+    throw new Error("error in throwsError");
+  }),
+  throwsErrorInsideTransaction: Effect.fn(function* () {
+    yield* zeroServer.Transaction.use(() => {
+      throw new Error("error in throwsErrorInsideTransaction");
+    }).pipe(zeroServer.Transaction.execute);
+  }),
+  throwsErrorAfterTransaction: Effect.fn(function* () {
+    yield* zeroServer.Transaction.use(async (tx) => {
+      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+    }).pipe(zeroServer.Transaction.execute);
+    throw new Error("error in throwsErrorAfterTransaction");
+  }),
+  clientThrowsError: Effect.fn(function* () {}),
+  yieldsError: Effect.fn(function* () {
+    yield* Effect.fail(new Error("error in yieldsError"));
+  }),
+  yieldsErrorInsideTransaction: Effect.fn(function* () {
+    yield* Effect.fail(new Error("error in yieldsErrorInsideTransaction")).pipe(zeroServer.Transaction.execute);
+  }),
+  yieldsErrorAfterTransaction: Effect.fn(function* () {
+    yield* zeroServer.Transaction.use(async (tx) => {
+      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+    }).pipe(zeroServer.Transaction.execute);
+    yield* Effect.fail(new Error("error in yieldsErrorAfterTransaction"));
+  }),
+  noTransaction: Effect.fn(function* () {}),
+  doubleTransaction: Effect.fn(function* () {
+    yield* zeroServer.Transaction.use(async (tx) => {
+      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+    }).pipe(zeroServer.Transaction.execute);
+    yield* zeroServer.Transaction.use(async (tx) => {
+      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+    }).pipe(zeroServer.Transaction.execute);
+  }),
+  concurrentTransactions: Effect.fn(function* () {
+    yield* Effect.all(
+      [
+        zeroServer.Transaction.use(async (tx) => {
+          await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+        }).pipe(zeroServer.Transaction.execute),
+        zeroServer.Transaction.use(async (tx) => {
+          await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+        }).pipe(zeroServer.Transaction.execute),
+      ],
+      { concurrency: "unbounded" },
+    );
+  }),
+});
 
 const zeroServer = ZeroServer.makeServer({
   database,
   clientTransaction: zeroClient.Transaction,
-});
-
-const createMessage = vi.fn(
-  Effect.fn(function* (item: Message) {
-    yield* zeroClient.Transaction.use(async (tx) => {
-      await tx.mutate.messages.insert(item);
-    });
-  }),
-);
-
-const clientMutators = zeroClient.mutators<MutatorArgs>()({
-  messages: {
-    create: createMessage,
-    throwsError: Effect.fn(function* () {}),
-    throwsErrorInsideTransaction: Effect.fn(function* () {}),
-    throwsErrorAfterTransaction: Effect.fn(function* () {}),
-    yieldsError: Effect.fn(function* () {}),
-    yieldsErrorInsideTransaction: Effect.fn(function* () {}),
-    yieldsErrorAfterTransaction: Effect.fn(function* () {}),
-    noTransaction: Effect.fn(function* () {}),
-    doubleTransaction: Effect.fn(function* () {}),
-    // @ts-expect-error
-    nonExistingMutator: Effect.fn(function* () {}),
-    concurrentTransactions: Effect.fn(function* () {}),
-  },
-});
-
-const serverMutators = zeroServer.mutators<MutatorArgs>()({
-  messages: {
-    create: Effect.fn(function* (item: Message) {
-      yield* createMessage(item).pipe(zeroServer.Transaction.execute);
-    }),
-    throwsError: Effect.fn(function* () {
-      yield* Effect.void;
-      throw new Error("error in throwsError");
-    }),
-    throwsErrorInsideTransaction: Effect.fn(function* () {
-      yield* zeroServer.Transaction.use(() => {
-        throw new Error("error in throwsErrorInsideTransaction");
-      }).pipe(zeroServer.Transaction.execute);
-    }),
-    throwsErrorAfterTransaction: Effect.fn(function* () {
-      yield* zeroServer.Transaction.use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-      }).pipe(zeroServer.Transaction.execute);
-      throw new Error("error in throwsErrorAfterTransaction");
-    }),
-    yieldsError: Effect.fn(function* () {
-      yield* Effect.fail(new Error("error in yieldsError"));
-    }),
-    yieldsErrorInsideTransaction: Effect.fn(function* () {
-      yield* Effect.fail(new Error("error in yieldsErrorInsideTransaction")).pipe(zeroServer.Transaction.execute);
-    }),
-    yieldsErrorAfterTransaction: Effect.fn(function* () {
-      yield* zeroServer.Transaction.use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-      }).pipe(zeroServer.Transaction.execute);
-      yield* Effect.fail(new Error("error in yieldsErrorAfterTransaction"));
-    }),
-    noTransaction: Effect.fn(function* () {}),
-    doubleTransaction: Effect.fn(function* () {
-      yield* zeroServer.Transaction.use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-      }).pipe(zeroServer.Transaction.execute);
-      yield* zeroServer.Transaction.use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-      }).pipe(zeroServer.Transaction.execute);
-    }),
-    concurrentTransactions: Effect.fn(function* () {
-      yield* Effect.all(
-        [
-          zeroServer.Transaction.use(async (tx) => {
-            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-          }).pipe(zeroServer.Transaction.execute),
-          zeroServer.Transaction.use(async (tx) => {
-            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-          }).pipe(zeroServer.Transaction.execute),
-        ],
-        { concurrency: "unbounded" },
-      );
-    }),
-  },
 });
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
@@ -170,7 +206,7 @@ function waitForLastItem<A, E, R>(stream: Stream.Stream<A, E, R>) {
     stream,
     Stream.timeout(Duration.millis(100)),
     Stream.runLast,
-    Effect.map(Option.getOrThrow),
+    Effect.map(Option.getOrThrowWith(() => new Error("No items received from server"))),
     Effect.scoped,
   );
 }
@@ -213,7 +249,7 @@ beforeAll(async () => {
       Layer.provide(BunHttpServer.layer({ port: 3000 })),
       Layer.tap(() => serverStarted.open),
     );
-    yield* Layer.launch(app).pipe(Effect.tap(Console.log("server closed")), Effect.forkDaemon);
+    yield* Layer.launch(app).pipe(Effect.forkDaemon);
     yield* serverStarted.await;
   }).pipe(Effect.provide(FetchHttpClient.layer));
 
@@ -259,6 +295,42 @@ test("processPush has no extra requirements", () => {
   const effect = zeroServer.processPush(serverMutators, {} as any, {} as any);
 
   expectTypeOf<Effect.Effect.Context<typeof effect>>().toEqualTypeOf<never>();
+});
+
+test("mutators should have correct argument types", () => {
+  expectTypeOf<Parameters<typeof clientMutators.optionalVoidArg>>().toEqualTypeOf<[(void | undefined)?]>();
+  expectTypeOf<Parameters<typeof clientMutators.throwsError>>().toEqualTypeOf<[]>();
+  expectTypeOf<Parameters<typeof clientMutators.messages.create>>().toEqualTypeOf<
+    [Schema.Schema.Type<typeof mutatorSchema.schema.messages.create>]
+  >();
+});
+
+test("mutator requirements should propagate", () => {
+  class DummyTag extends Effect.Service<DummyTag>()(prefixId("DummyTag"), {
+    succeed: {},
+  }) {}
+
+  class DummyTag2 extends Effect.Service<DummyTag2>()(prefixId("DummyTag2"), {
+    succeed: {},
+  }) {}
+
+  const mutatorSchema = MutatorSchema.make({
+    dummy: Schema.Void,
+    dummy2: Schema.Void,
+  });
+  const mutators = mutatorSchema.makeMutators({
+    dummy: Effect.fn(function* () {
+      yield* DummyTag;
+    }),
+    dummy2: Effect.fn(function* () {
+      yield* DummyTag2;
+    }),
+  });
+  const clientEffect = zeroClient.unwrapMutators(mutators);
+  const serverEffect = zeroServer.processPush(mutators, {} as any, {} as any);
+
+  expectTypeOf<Effect.Effect.Context<typeof clientEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
+  expectTypeOf<Effect.Effect.Context<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
 
 test("rows are returned after data is inserted", async () => {
@@ -351,57 +423,88 @@ test("custom mutators work", async () => {
   const item: Message = { id: nanoid(), body: "Hello, world!" };
   await z.mutate.messages.create(item).server;
 
-  expect(createMessage).toHaveBeenCalledWith(item);
-
   const result = await rawDb`select id, body from messages`;
   expect(result.slice()).toEqual([item]);
 });
 
+test("schema validation is applied to mutator arguments", async () => {
+  const mut = z.mutate.messages.create({} as any);
+  await mut.client.catch((e) => {
+    expect(e).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
+  });
+  await mut.server.catch((e) => {
+    expect(e).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
+  });
+});
+
+test("schema transformations are applied to mutator arguments", async () => {
+  expectTypeOf<Parameters<typeof z.mutate.transformArgs>>().toEqualTypeOf<
+    [Schema.Schema.Encoded<typeof mutatorSchema.schema.transformArgs>]
+  >();
+  expectTypeOf<Parameters<typeof clientMutators.transformArgs>>().toEqualTypeOf<
+    [Schema.Schema.Type<typeof mutatorSchema.schema.transformArgs>]
+  >();
+
+  await z.mutate.transformArgs({ foo: "1" }).server;
+
+  expect(transformArgsClient).toBeCalledWith({ foo: 1 });
+  expect(transformArgsServer).toBeCalledWith({ foo: 1 });
+});
+
 test("mutator that throws error should reject", async () => {
-  expect(z.mutate.messages.throwsError().server).rejects.toEqual({
+  expect(z.mutate.throwsError().server).rejects.toEqual({
     error: "app",
     details: "error in throwsError",
   });
 });
 
 test("mutator that throws error inside transaction should reject", async () => {
-  expect(z.mutate.messages.throwsErrorInsideTransaction().server).rejects.toEqual({
+  expect(z.mutate.throwsErrorInsideTransaction().server).rejects.toEqual({
     error: "app",
     details: "error in throwsErrorInsideTransaction",
   });
 });
 
 test("mutator that throws error after transaction should resolve", async () => {
-  expect(z.mutate.messages.throwsErrorAfterTransaction().server).resolves.toBeDefined();
+  expect(z.mutate.throwsErrorAfterTransaction().server).resolves.toBeDefined();
+});
+
+test("client mutator that throws error should reject", async () => {
+  const mut = z.mutate.clientThrowsError();
+
+  await Promise.allSettled([mut.client, mut.server]);
+
+  expect(mut.client).rejects.toThrowError("client error");
+  expect(mut.server).rejects.toThrowError("client error");
 });
 
 test("mutator that yields error should reject", async () => {
-  expect(z.mutate.messages.yieldsError().server).rejects.toEqual({
+  expect(z.mutate.yieldsError().server).rejects.toEqual({
     error: "app",
     details: "error in yieldsError",
   });
 });
 
 test("mutator that yields error inside transaction should reject", async () => {
-  expect(z.mutate.messages.yieldsErrorInsideTransaction().server).rejects.toEqual({
+  expect(z.mutate.yieldsErrorInsideTransaction().server).rejects.toEqual({
     error: "app",
     details: "error in yieldsErrorInsideTransaction",
   });
 });
 
 test("mutator that yields error after transaction should resolve", async () => {
-  expect(z.mutate.messages.yieldsErrorAfterTransaction().server).resolves.toBeDefined();
+  expect(z.mutate.yieldsErrorAfterTransaction().server).resolves.toBeDefined();
 });
 
 test("mutator without transaction should reject", async () => {
-  expect(z.mutate.messages.noTransaction().server).rejects.toEqual({
+  expect(z.mutate.noTransaction().server).rejects.toEqual({
     error: "app",
     details: "No transaction detected in a mutation, a transaction is required.",
   });
 });
 
-test("mutator that invokes transaction more than once should reject", async () => {
-  await expect(z.mutate.messages.doubleTransaction().server).resolves.toBeDefined();
+test("mutator that invokes transaction more than once should resolve", async () => {
+  await expect(z.mutate.doubleTransaction().server).resolves.toBeDefined();
 });
 
 test("out of order mutations should be rejected", async () => {
@@ -424,12 +527,29 @@ test("out of order mutations should be rejected", async () => {
 });
 
 test("non-existing mutator should reject", async () => {
-  expect((z.mutate.messages as any).nonExistingMutator().server).rejects.toEqual({
+  const mutatorSchema = MutatorSchema.make({
+    nonExistingMutator: Schema.Void,
+  });
+  const clientMutators = mutatorSchema.makeMutators({
+    nonExistingMutator: Effect.fn(function* () {}),
+  });
+  const z = new Zero({
+    userID: "anon",
+    server: "http://localhost:4848",
+    schema,
+    mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
+    push: {
+      url: "http://localhost:3000/push",
+    },
+    onError,
+  });
+
+  expect(z.mutate.nonExistingMutator().server).rejects.toEqual({
     error: "app",
     details: "Internal error",
   });
 });
 
 test("concurrent transactions should be resolved", async () => {
-  await expect(z.mutate.messages.concurrentTransactions().server).resolves.toBeDefined();
+  await expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined();
 });

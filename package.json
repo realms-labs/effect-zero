@@ -1,6 +1,5 @@
 {
   "name": "effect-zero",
-  "module": "index.ts",
   "type": "module",
   "private": true,
   "scripts": {
@@ -9,10 +8,8 @@
     "lint:fix": "biome check --write --unsafe"
   },
   "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "@types/bun": "latest",
+    "typescript": "5.9.2"
   },
   "dependencies": {
     "@biomejs/biome": "2.2.4",

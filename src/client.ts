@@ -1,60 +1,67 @@
 import { Atom } from "@effect-atom/atom";
-import type { HumanReadable, Query, ReadonlyJSONValue, Schema, Transaction } from "@rocicorp/zero";
+import type { HumanReadable, Query, ReadonlyJSONValue, Transaction, Schema as ZeroSchema } from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
-import type * as Cause from "effect/Cause";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Match from "effect/Match";
+import type * as ParseResult from "effect/ParseResult";
+import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { MutatorArgs, MutatorSchema } from "./mutators";
+import { type AnyMutator, type AnyMutators, type ExtractMutatorsRequirements, MutatorArgsSchemaSym } from "./mutators";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot";
 import { prefixId } from "./utils";
 
 // Updated to: https://github.com/rocicorp/mono/blob/2e18f2e1d084c530ebd9bd7fef9bb848e607cc19/packages/zero-pg/src/push-processor.ts
 
-export const makeClient = <S extends Schema>() => {
+// Necessary workaround for TS declaration generation
+export interface ZeroClientTransaction {
+  readonly _tag: unique symbol;
+}
+
+export const makeClient = <S extends ZeroSchema>() => {
   // TODO: Maybe prefix this / suffix this with a tag passed in to `make`?
-  class ZeroClientTransaction extends Context.Tag(prefixId("ZeroClientTransaction"))<
-    ZeroClientTransaction,
-    Transaction<S>
-  >() {
-    static use = <A>(fn: (transaction: Transaction<S>, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
-      Effect.andThen(ZeroClientTransaction, (transaction) =>
-        Effect.promise((signal) => fn(transaction, { signal })),
-      ).pipe(
-        Effect.tapErrorCause((cause) => Effect.logError(cause)),
-        Effect.sandbox,
-        Effect.annotateLogs({ module: prefixId("ZeroClient.Transaction"), method: "use" }),
-        Effect.mapError((cause) => new ZeroClientTransactionError({ cause })),
-      );
-  }
+  const ZeroClientTransaction = Context.Tag(prefixId("ZeroClientTransaction"))<ZeroClientTransaction, Transaction<S>>();
 
-  const mutators =
-    <M extends MutatorArgs>() =>
-    <R>(mutators: MutatorSchema<R, M>) =>
-      mutators;
+  const use = <A>(fn: (transaction: Transaction<S>, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
+    Effect.flatMap(ZeroClientTransaction, (transaction) =>
+      Effect.promise((signal) => fn(transaction, { signal })),
+    ).pipe(
+      Effect.tapErrorCause((cause) => Effect.logError(cause)),
+      Effect.sandbox,
+      Effect.annotateLogs({ module: prefixId("ZeroClient.Transaction"), method: "use" }),
+      Effect.mapError((cause) => new ZeroClientTransactionError({ cause })),
+    );
 
-  const unwrapMutators = <M extends MutatorArgs, R>(mutators: MutatorSchema<R, M>) => {
-    return Effect.gen(function* () {
-      const runtime = yield* Effect.runtime<Exclude<R, ZeroClientTransaction>>();
-      return Rec.map(
-        mutators,
-        Rec.map(
-          // NOTE:
-          // biome-ignore lint/suspicious/noExplicitAny: think there's no way around this, no way to maintain the type of `args`
-          (mutator) => (tx: Transaction<S>, args: any) => {
-            return mutator(args).pipe(Effect.provideService(ZeroClientTransaction, tx), (effect) =>
-              Runtime.runPromise(runtime, effect),
-            );
-          },
-        ),
-      ) as UnwrappedMutatorSchema<S, M>;
-    });
-  };
+  const unwrapMutators = Effect.fn(function* <T extends AnyMutators>(mutators: T) {
+    const runtime = yield* Effect.runtime<Exclude<ExtractMutatorsRequirements<T>, ZeroClientTransaction>>();
+
+    function unwrapMutator<E>(mutator: AnyMutator<ExtractMutatorsRequirements<T>, E>) {
+      return async (tx: Transaction<S>, args: unknown) => {
+        const exit = await Schema.decode(mutator[MutatorArgsSchemaSym])(args).pipe(
+          Effect.catchTag("ParseError", (e) => new ZeroClientArgsParseError({ cause: Cause.fail(e) })),
+          Effect.flatMap(mutator),
+          Effect.provideService(ZeroClientTransaction, tx),
+          Runtime.runPromiseExit(runtime),
+        );
+        return Exit.getOrElse(exit, (c) => {
+          // Extract underlying error bypassing FiberFailure
+          throw Cause.squash(c);
+        });
+      };
+    }
+
+    return Rec.map(mutators, (v) =>
+      Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
+    ) as UnwrapMutators<S, T>;
+  });
 
   const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) {
     const view = yield* Effect.acquireRelease(
@@ -92,20 +99,27 @@ export const makeClient = <S extends Schema>() => {
   );
 
   return {
-    mutators,
     unwrapMutators,
     querySub,
     queryAtom,
-    Transaction: ZeroClientTransaction,
+    Transaction: Object.assign(ZeroClientTransaction, { use }),
   };
 };
 
-export type UnwrappedMutatorSchema<S extends Schema, M extends MutatorArgs> = {
-  [A in keyof M]: {
-    [B in keyof M[A]]: (transaction: Transaction<S>, args: M[A][B]) => Promise<void>;
-  };
-};
+type UnwrapMutator<S extends ZeroSchema, T extends AnyMutator> = Parameters<T> extends []
+  ? (transaction: Transaction<S>) => Promise<void>
+  : (transaction: Transaction<S>, args: Schema.Schema.Encoded<T[typeof MutatorArgsSchemaSym]>) => Promise<void>;
 
-class ZeroClientTransactionError extends Data.TaggedError("ZeroClientTransactionError")<{
+export type UnwrapMutators<S extends ZeroSchema, T extends AnyMutators> = {
+  [A in keyof T]: T[A] extends AnyMutator
+    ? UnwrapMutator<S, T[A]>
+    : { [B in keyof T[A]]: T[A][B] extends AnyMutator ? UnwrapMutator<S, T[A][B]> : never };
+} & {};
+
+export class ZeroClientTransactionError extends Data.TaggedError("ZeroClientTransactionError")<{
   cause: Cause.Cause<unknown>;
+}> {}
+
+export class ZeroClientArgsParseError extends Data.TaggedError("ZeroClientArgsParseError")<{
+  cause: Cause.Cause<ParseResult.ParseError>;
 }> {}
