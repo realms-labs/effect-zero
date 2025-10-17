@@ -2,11 +2,14 @@
   "name": "tests",
   "module": "index.ts",
   "dependencies": {
+    "@effect-atom/atom": "^0.3.3",
     "@effect/platform-bun": "^0.79.0",
-    "@rocicorp/zero": "^0.23.2025090100",
+    "@rocicorp/zero": "^0.24.2025101500",
     "bun-storage": "^1.1.1",
     "drizzle-orm": "^0.44.5",
     "drizzle-zero": "^0.14.0",
+    "effect": "^3.18.4",
+    "effect-zero": "../package.tgz",
     "nanoid": "^5.1.5"
   },
   "devDependencies": {
@@ -17,7 +20,6 @@
   "private": true,
   "scripts": {
     "gen": "drizzle-zero generate --format -s drizzle.schema.ts -o schema.gen.ts",
-    "dev": "bun index.ts",
     "test:types": "tsc"
   },
   "trustedDependencies": [

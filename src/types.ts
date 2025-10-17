@@ -110,21 +110,19 @@ const ZeroMutationId = Schema.Struct({
   clientID: Schema.String,
 });
 
-/** @internal */
 export const ZeroAppError = Schema.Struct({
   error: Schema.Literal("app"),
   // The user can return any additional data here
   details: Schema.optional(JsonSchema),
 });
-/** @internal */
+
 export type ZeroAppError = typeof ZeroAppError.Type;
 
-/** @internal */
 export const ZeroError = Schema.Struct({
   error: Schema.Union(Schema.Literal("oooMutation"), Schema.Literal("alreadyProcessed")),
   details: Schema.optional(JsonSchema),
 });
-/** @internal */
+
 export type ZeroError = typeof ZeroError.Type;
 
 const ZeroMutationOk = Schema.Struct({
