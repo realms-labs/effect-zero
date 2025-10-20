@@ -2,6 +2,9 @@
   "name": "effect-zero",
   "type": "module",
   "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/realms-labs/effect-zero"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit --incremental",
     "lint": "biome check --error-on-warnings",
