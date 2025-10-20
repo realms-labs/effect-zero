@@ -15,9 +15,14 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { type AnyMutator, type AnyMutators, type ExtractMutatorsRequirements, MutatorArgsSchemaSym } from "./mutators";
-import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot";
-import { prefixId } from "./utils";
+import {
+  type AnyMutator,
+  type AnyMutators,
+  type ExtractMutatorsRequirements,
+  MutatorArgsSchemaSym,
+} from "./mutators.js";
+import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
+import { prefixId } from "./utils.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/2e18f2e1d084c530ebd9bd7fef9bb848e607cc19/packages/zero-pg/src/push-processor.ts
 

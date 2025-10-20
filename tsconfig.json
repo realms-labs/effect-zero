@@ -3,14 +3,14 @@
     // Environment setup & latest features
     "lib": ["ESNext"],
     "target": "ESNext",
-    "module": "ESNext",
+    "module": "NodeNext",
     "moduleDetection": "force",
     "jsx": "react-jsx",
     "allowJs": false,
     "outDir": "dist",
 
     // Bundler mode
-    "moduleResolution": "bundler",
+    "moduleResolution": "NodeNext",
     "verbatimModuleSyntax": true,
 
     // Best practices
@@ -26,7 +26,9 @@
     "noErrorTruncation": true,
 
     "declaration": true,
+    "declarationMap": true,
     "stripInternal": true,
+    "sourceMap": true,
 
     "plugins": [
       {
@@ -47,5 +49,5 @@
       }
     ]
   },
-  "exclude": ["node_modules", "tests", "dist"]
+  "include": ["src"]
 }

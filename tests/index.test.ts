@@ -31,13 +31,13 @@ import {
   Subscribable,
 } from "effect";
 import * as Predicate from "effect/Predicate";
+import * as ZeroClient from "effect-zero/client";
+import { MutatorSchema } from "effect-zero/mutators";
+import * as ZeroServer from "effect-zero/server";
+import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "effect-zero/types";
+import { prefixId } from "effect-zero/utils";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
-import * as ZeroClient from "../src/client";
-import { MutatorSchema } from "../src/mutators";
-import * as ZeroServer from "../src/server";
-import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "../src/types";
-import { prefixId } from "../src/utils";
 import { messages } from "./drizzle.schema";
 import { schema, type Schema as ZeroSchema } from "./schema";
 import type { Message } from "./schema.gen";
@@ -192,9 +192,7 @@ function initZero() {
     server: "http://localhost:4848",
     schema,
     mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
-    push: {
-      url: "http://localhost:3000/push",
-    },
+    mutateURL: "http://localhost:3000/push",
     onError,
   });
 }
@@ -538,9 +536,7 @@ test("non-existing mutator should reject", async () => {
     server: "http://localhost:4848",
     schema,
     mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
-    push: {
-      url: "http://localhost:3000/push",
-    },
+    mutateURL: "http://localhost:3000/push",
     onError,
   });
 

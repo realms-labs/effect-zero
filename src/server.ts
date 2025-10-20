@@ -17,7 +17,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { type AnyMutators, type ExtractMutatorsRequirements, MutatorArgsSchemaSym } from "./mutators";
+import { type AnyMutators, type ExtractMutatorsRequirements, MutatorArgsSchemaSym } from "./mutators.js";
 import {
   type ZeroAppError,
   type ZeroError,
@@ -27,8 +27,8 @@ import {
   type ZeroPushBody,
   type ZeroPushParams,
   type ZeroPushResponse,
-} from "./types";
-import { prefixId } from "./utils";
+} from "./types.js";
+import { prefixId } from "./utils.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
@@ -98,7 +98,6 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
       }),
     );
 
-  /** @internal */
   const checkAndIncrementLastMutationID = Effect.gen(function* () {
     const { transactionHooks } = yield* ZeroServerTransactionContext;
     const { clientID, mutationID: receivedMutationID } = yield* ZeroTransactionInput;
@@ -163,7 +162,6 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
     return { mutations: Chunk.toArray(responses) } satisfies ZeroPushResponse;
   });
 
-  /** @internal */
   const processMutation = Effect.fn(
     function* <R>(mutators: AnyMutators<R>, mutation: ZeroMutation) {
       // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
@@ -228,7 +226,6 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
     Effect.provide(ZeroServerMutationContext.Default),
   );
 
-  /** @internal */
   const processMutationError = Effect.fn(function* (e: unknown) {
     const { clientID, mutationID } = yield* ZeroTransactionInput;
 
@@ -264,7 +261,6 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
   };
 };
 
-/** @internal */
 class ZeroTransactionInput extends Context.Tag(prefixId("ZeroTransactionInput"))<
   ZeroTransactionInput,
   TransactionProviderInput
@@ -315,7 +311,6 @@ class WriteMutationResultError extends Data.TaggedError("WriteMutationResultErro
 }> {}
 class CustomMutationExpectedError extends Data.TaggedError("CustomMutationExpectedError")<object> {}
 
-/** @internal */
 export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {
   override message = "Multiple transactions detected in a mutation, only one transaction is allowed.";
 }
@@ -325,7 +320,6 @@ export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
 }
 
 const OutOfOrderMutationErrorTypeId = Symbol.for(prefixId("OutOfOrderMutationError"));
-/** @internal */
 export class OutOfOrderMutationError extends Data.TaggedError("OutOfOrderMutationError")<{
   readonly clientID: string;
   readonly receivedMutationID: number;
@@ -341,7 +335,6 @@ export class OutOfOrderMutationError extends Data.TaggedError("OutOfOrderMutatio
 }
 
 const MutationAlreadyProcessedErrorTypeId = Symbol.for(prefixId("MutationAlreadyProcessedError"));
-/** @internal */
 export class MutationAlreadyProcessedError extends Data.TaggedError("MutationAlreadyProcessedError")<{
   readonly clientID: string;
   readonly received: number;

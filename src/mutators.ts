@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
-import { prefixId } from "./utils";
+import { prefixId } from "./utils.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
 export type AnyMutatorDef<R = any, TArgs extends any[] = any[]> = (...args: TArgs) => Effect.Effect<any, any, R>;

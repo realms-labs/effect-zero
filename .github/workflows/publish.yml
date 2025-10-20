@@ -1,18 +1,19 @@
-name: Tests
-
 on:
-  pull_request: {}
+  workflow_dispatch: {}
+
+name: Publish
 
 jobs:
-  test:
+  publish:
+    name: Publish
     runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-      pull-requests: write
-    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v3
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: latest
+          registry-url: 'https://registry.npmjs.org'
       - uses: docker/setup-compose-action@v1
       - name: Install dependencies
         shell: bash
@@ -37,6 +38,8 @@ jobs:
           bun zero-cache-dev > /dev/null 2>&1 &
           sleep 10
           bun test
-      - uses: JoA-MoS/lcov-reporter-action@v1.0.0-alpha.4
-        with:
-          working-directory: ./tests
+      - name: Publish
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish package.tgz --provenance --access public
