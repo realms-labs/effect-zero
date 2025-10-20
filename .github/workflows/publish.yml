@@ -16,8 +16,10 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - uses: docker/setup-compose-action@v1
       - name: Install dependencies
+        shell: bash
         run: bun i
       - name: Build & package
+        shell: bash
         run: bun run build
       - name: Install test dependencies
         working-directory: tests

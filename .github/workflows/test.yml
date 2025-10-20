@@ -15,11 +15,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: docker/setup-compose-action@v1
       - name: Install dependencies
+        shell: bash
         run: bun i
       - name: Build & package
+        shell: bash
         run: bun run build
       - name: Install test dependencies
         working-directory: tests
+        shell: bash
         run: |-
           cp .env.example .env
           docker compose up -d --wait
@@ -28,6 +31,7 @@ jobs:
           bun drizzle-kit migrate
       - name: Test
         working-directory: tests
+        shell: bash
         run: |-
           bun test:types
           bun zero-cache-dev > /dev/null 2>&1 &
