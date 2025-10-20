@@ -17,6 +17,8 @@ jobs:
       - uses: docker/setup-compose-action@v1
       - name: Install dependencies
         run: bun i
+      - name: Build & package
+        run: bun run build
       - name: Install test dependencies
         working-directory: tests
         shell: bash
@@ -26,8 +28,6 @@ jobs:
           bun i
           bun gen
           bun drizzle-kit migrate
-      - name: Build & package
-        run: bun run build
       - name: Test
         working-directory: tests
         shell: bash
