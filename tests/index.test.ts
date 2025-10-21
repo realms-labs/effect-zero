@@ -384,7 +384,7 @@ test("dummy zero context is detected", async () => {
     },
     onFailure: (e) => {
       // @ts-ignore
-      expect(e.error).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
+      expect(e.error.toString()).toContain("DummyZeroDetectedError");
     },
   });
 });
