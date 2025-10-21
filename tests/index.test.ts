@@ -30,6 +30,7 @@ import {
   Stream,
   Subscribable,
 } from "effect";
+import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
 import * as ZeroClient from "effect-zero/client";
 import { MutatorSchema } from "effect-zero/mutators";
@@ -370,6 +371,19 @@ test("rows are returned after data is inserted", async () => {
     expect(result.data).toBeArrayOfSize(2);
     expect(result.data).toContainAllValues([value1, value2]);
   }
+});
+
+test("dummy zero context is detected", async () => {
+  const sub = zeroClient.querySub(z.query.messages);
+  const result = await sub.pipe(waitForLastItem, Effect.runPromiseExit);
+  Exit.match(result, {
+    onSuccess: () => {
+      throw new Error("expected error");
+    },
+    onFailure: (e) => {
+      expect(e).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
+    },
+  });
 });
 
 test("atom is set to correct value", async () => {

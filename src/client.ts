@@ -6,7 +6,9 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
@@ -69,6 +71,13 @@ export const makeClient = <S extends ZeroSchema>() => {
   });
 
   const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) {
+    const dummyZeroContext = yield* Effect.serviceOption(DummyZeroContext);
+
+    yield* Option.match(dummyZeroContext, {
+      onSome: (value: string) => new DummyZeroDetectedError({ value }),
+      onNone: () => Effect.log("no dummy zero detected"),
+    });
+
     const view = yield* Effect.acquireRelease(
       Effect.sync(() => query.materialize()),
       (view) => Effect.sync(() => view.destroy()),
@@ -110,6 +119,14 @@ export const makeClient = <S extends ZeroSchema>() => {
     Transaction: Object.assign(ZeroClientTransaction, { use }),
   };
 };
+
+class DummyZeroContext extends Context.Tag(prefixId("DummyZeroContext"))<DummyZeroContext, string>() {
+  static layer = (value: string) => Layer.succeed(DummyZeroContext, value);
+}
+
+export class DummyZeroDetectedError extends Data.TaggedError("DummyZeroDetectedError")<{
+  value: string;
+}> {}
 
 type UnwrapMutator<S extends ZeroSchema, T extends AnyMutator> = Parameters<T> extends []
   ? (transaction: Transaction<S>) => Promise<void>
