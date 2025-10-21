@@ -383,7 +383,8 @@ test("dummy zero context is detected", async () => {
       throw new Error("expected error");
     },
     onFailure: (e) => {
-      expect(e).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
+      // @ts-ignore
+      expect(e.failure).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
     },
   });
 });
