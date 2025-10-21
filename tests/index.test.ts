@@ -374,7 +374,9 @@ test("rows are returned after data is inserted", async () => {
 });
 
 test("dummy zero context is detected", async () => {
-  const sub = zeroClient.querySub(z.query.messages);
+  const sub = zeroClient
+    .querySub(z.query.messages)
+    .pipe(Effect.provide(ZeroClient.DummyZeroContext.layer("dummy-zero")));
   const result = await sub.pipe(waitForLastItem, Effect.runPromiseExit);
   Exit.match(result, {
     onSuccess: () => {

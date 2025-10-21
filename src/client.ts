@@ -120,7 +120,7 @@ export const makeClient = <S extends ZeroSchema>() => {
   };
 };
 
-class DummyZeroContext extends Context.Tag(prefixId("DummyZeroContext"))<DummyZeroContext, string>() {
+export class DummyZeroContext extends Context.Tag(prefixId("DummyZeroContext"))<DummyZeroContext, string>() {
   static layer = (value: string) => Layer.succeed(DummyZeroContext, value);
 }
 
