@@ -73,11 +73,6 @@ export const makeClient = <S extends ZeroSchema>() => {
   const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) {
     const dummyZeroContext = yield* Effect.serviceOption(DummyZeroContext);
 
-    yield* Option.match(dummyZeroContext, {
-      onSome: (value: string) => new DummyZeroDetectedError({ value }),
-      onNone: () => Effect.log("no dummy zero detected"),
-    });
-
     const view = yield* Effect.acquireRelease(
       Effect.sync(() => query.materialize()),
       (view) => Effect.sync(() => view.destroy()),
@@ -98,6 +93,11 @@ export const makeClient = <S extends ZeroSchema>() => {
       Stream.runForEach((snapshot) => SubscriptionRef.set(subscriptionRef, snapshot)),
       Effect.forkScoped,
     );
+
+    yield* Option.match(dummyZeroContext, {
+      onSome: (value: string) => new DummyZeroDetectedError({ value }),
+      onNone: () => Effect.void,
+    });
 
     return subscriptionRef.pipe(
       Subscribable.map(([data, { type: status }]) => ({
