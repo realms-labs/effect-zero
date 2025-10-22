@@ -234,7 +234,7 @@ const zeroAtom = AtomBootstrapRuntime.atom(
   }),
 );
 
-// const AtomRuntime = Atom.runtime(Layer.effect(zeroClient.ZeroProvider, Atom.getResult(zeroAtom)));
+const AtomRuntime = Atom.runtime(Layer.succeed(zeroClient.ZeroProvider, Atom.getResult(zeroAtom)));
 
 let z: Atom.Success<typeof zeroAtom>;
 
@@ -612,7 +612,11 @@ test.only("synced queries", async () => {
 
   const atom = Atom.make(
     Effect.fn(function* (get) {
-      return yield* get.result(zeroClient.queryAtom(yield* myMessages(item.id)));
+      return yield* get.result(
+        AtomRuntime.subscribable(zeroClient.querySub(yield* myMessages(item.id)).pipe(Effect.scoped)).pipe(
+          Atom.mapResult((res) => res.data),
+        ),
+      );
     }),
   );
 
@@ -621,7 +625,6 @@ test.only("synced queries", async () => {
   const result = await pipe(
     Atom.toStreamResult(atom),
     waitForLastItem,
-    Effect.provideService(zeroClient.ZeroProvider, z),
     Effect.provide(Registry.layer),
     Effect.runPromise,
   );
