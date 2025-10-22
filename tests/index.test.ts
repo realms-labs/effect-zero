@@ -18,19 +18,8 @@ import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
 import { createSessionStorage } from "bun-storage";
 import { count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import {
-  Chunk,
-  Console,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  pipe,
-  Schema,
-  type Scope,
-  Stream,
-  Subscribable,
-} from "effect";
+import { Chunk, Console, Duration, Effect, Layer, Option, pipe, Schema, Scope, Stream, Subscribable } from "effect";
+import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
 import * as ZeroClient from "effect-zero/client";
 import { MutatorSchema } from "effect-zero/mutators";
@@ -212,31 +201,51 @@ const zeroServer = ZeroServer.makeServer({
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
-const AtomBootstrapRuntime = Atom.runtime(Layer.empty);
+const AtomRuntime: Atom.AtomRuntime<ZeroClient.ZeroClientProvider> = Atom.runtime(
+  Layer.succeed(
+    zeroClient.ZeroProvider,
+    Effect.suspend(() => Atom.getResult(zeroAtom)),
+  ),
+);
 
-const userIdAtom = AtomBootstrapRuntime.atom(Effect.sync(() => "anon"));
-const zeroAtom = AtomBootstrapRuntime.atom(
+const userIdAtom = AtomRuntime.atom(Effect.sync(() => "anon"));
+const zeroAtom = AtomRuntime.atom(
   Effect.fn(function* (get) {
     const userId = yield* get.result(userIdAtom);
     const z = new Zero({
       userID: userId,
       server: "http://localhost:4848",
       schema,
-      mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
+      mutators: yield* zeroClient.unwrapMutators(clientMutators),
       mutateURL: "http://localhost:3000/push",
       onError,
     });
-    // get.addFinalizer(() => {
-    //   console.log("closing zero");
-    //   z.close();
-    // });
+    get.addFinalizer(() => {
+      console.log("closing zero");
+      z.close();
+    });
+
+    // const c = yield* Effect.promise(() =>
+    //   ddb
+    //     .select({ count: count() })
+    //     .from(messages)
+    //     .then((r) => r[0]!.count),
+    // );
+    // if (c > 0) {
+    //   yield* Effect.promise(() => rawDb`truncate table messages`);
+
+    //   // Wait until view is synced after truncation
+    //   const sub = yield* zeroClient.querySub(z.query.messages);
+    //   yield* pipe(
+    //     Stream.filter(sub.changes, (d) => d.status === "complete"),
+    //     waitForLastItem,
+    //     Effect.tap((d) => Effect.die(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
+    //     Effect.scoped,
+    //   );
+    // }
     return z;
   }),
 );
-
-const AtomRuntime = Atom.runtime(Layer.succeed(zeroClient.ZeroProvider, Atom.getResult(zeroAtom)));
-
-let z: Atom.Success<typeof zeroAtom>;
 
 const waitForLastItem = Effect.fn("waitForLastItem")(function* <A, E, R>(stream: Stream.Stream<A, E, R>) {
   return yield* pipe(
@@ -279,7 +288,7 @@ beforeAll(async () => {
       "/get-queries",
       Effect.gen(function* () {
         const payload = yield* HttpServerRequest.schemaBodyJson(ZeroTransformRequestMessage);
-        yield* Console.log("get-queries payload:", payload);
+        // yield* Console.log("get-queries payload:", payload);
         const response = yield* ZeroQueries.handleGetQueries(queries, schema, payload);
         return yield* HttpServerResponse.json(response);
       }).pipe(
@@ -312,32 +321,11 @@ beforeEach(async () => {
   onError.mockReset();
 
   responses = Chunk.empty<ZeroPushResponse>();
-
-  z = pipe(Atom.getResult(zeroAtom), Effect.provide(Registry.layer), Effect.runSync);
-
-  const c = await ddb
-    .select({ count: count() })
-    .from(messages)
-    .then((r) => r[0]!.count);
-  if (c > 0) {
-    await rawDb`truncate table messages`;
-
-    // Wait until view is synced after truncation
-    const sub = zeroClient.querySub(z.query.messages);
-    await pipe(
-      Subscribable.unwrap(sub).changes,
-      Stream.filter((d) => d.status === "complete"),
-      waitForLastItem,
-      Effect.tap((d) => Effect.fail(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
-      Effect.scoped,
-      Effect.runPromise,
-    );
-  }
 });
 
-afterEach(async () => {
-  await z?.close();
-});
+// afterEach(async () => {
+//   await z?.close();
+// });
 
 test("server is running", async () => {
   const response = await fetch("http://localhost:3000/health");
@@ -613,9 +601,10 @@ test.only("synced queries", async () => {
   const atom = Atom.make(
     Effect.fn(function* (get) {
       return yield* get.result(
-        AtomRuntime.subscribable(zeroClient.querySub(yield* myMessages(item.id)).pipe(Effect.scoped)).pipe(
-          Atom.mapResult((res) => res.data),
-        ),
+        zeroClient.queryAtom({
+          runtime: AtomRuntime,
+          query: yield* myMessages(item.id),
+        }),
       );
     }),
   );

@@ -1,4 +1,5 @@
 import { Atom } from "@effect-atom/atom";
+import type { AtomRuntime } from "@effect-atom/atom/Atom";
 import type { AtomRegistry } from "@effect-atom/atom/Registry";
 import type { HumanReadable, Query, ReadonlyJSONValue, Transaction, Zero, Schema as ZeroSchema } from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
@@ -14,7 +15,7 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
-import type * as Scope from "effect/Scope";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -130,11 +131,32 @@ export const makeClient = <S extends ZeroSchema>() => {
   // const queryAtom = Atom.family(<T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) => {
   //   return Atom.subscribable(querySub<T, R>(query)).pipe(Atom.mapResult((res) => res.data));
   // });
+  const queryAtom = Atom.family(
+    <T extends keyof S["tables"] & string, R>({
+      runtime,
+      query,
+    }: {
+      runtime: AtomRuntime<ZeroClientProvider>;
+      query: Query<S, T, R>;
+    }) => {
+      return runtime
+        .subscribable(
+          Effect.fn(function* (get) {
+            const scope = yield* Scope.make();
+            get.addFinalizer(() => {
+              Scope.close(scope, Exit.void).pipe(Effect.runPromise);
+            });
+            return yield* querySub(query).pipe(Scope.extend(scope));
+          }),
+        )
+        .pipe(Atom.mapResult((res) => res.data));
+    },
+  );
 
   return {
     unwrapMutators,
     querySub,
-    // queryAtom,
+    queryAtom,
     Transaction: Object.assign(ZeroClientTransaction, { use }),
     ZeroProvider: ZeroClientProvider,
   };
