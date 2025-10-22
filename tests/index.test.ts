@@ -8,11 +8,12 @@ import dotenv from "dotenv";
 
 dotenv.config({ path: "tests/.env", quiet: true });
 
-import { beforeAll, beforeEach, expect, expectTypeOf, test, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, expect, expectTypeOf, test, vi } from "bun:test";
 import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { BunHttpServer } from "@effect/platform-bun";
 import { Atom, Registry, Result } from "@effect-atom/atom";
-import { Zero } from "@rocicorp/zero";
+import { AtomRegistry } from "@effect-atom/atom/Registry";
+import { createBuilder, syncedQuery, Zero } from "@rocicorp/zero";
 import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
 import { createSessionStorage } from "bun-storage";
 import { count } from "drizzle-orm";
@@ -33,8 +34,10 @@ import {
 import * as Predicate from "effect/Predicate";
 import * as ZeroClient from "effect-zero/client";
 import { MutatorSchema } from "effect-zero/mutators";
+import * as ZeroQueries from "effect-zero/queries";
 import * as ZeroServer from "effect-zero/server";
-import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "effect-zero/types";
+import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "effect-zero/types/push";
+import { ZeroTransformRequestMessage } from "effect-zero/types/queries";
 import { prefixId } from "effect-zero/utils";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
@@ -179,6 +182,29 @@ const serverMutators = mutatorSchema.makeMutators({
   }),
 });
 
+const builder = createBuilder(schema);
+
+const myMessages = ZeroQueries.makeQuery({
+  name: "myMessages",
+  payload: Schema.Tuple(Schema.String),
+  query: Effect.fn(function* (id) {
+    return yield* Effect.succeed(builder.messages.where("id", id));
+  }),
+});
+
+const q1 = ZeroQueries.makeQuery({
+  name: "q1",
+  payload: Schema.Tuple(Schema.String),
+  query: Effect.fn(function* () {
+    return yield* Effect.succeed(builder.messages);
+  }),
+});
+
+const queries = {
+  myMessages,
+  q1,
+};
+
 const zeroServer = ZeroServer.makeServer({
   database,
   clientTransaction: zeroClient.Transaction,
@@ -186,28 +212,40 @@ const zeroServer = ZeroServer.makeServer({
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
-function initZero() {
-  return new Zero({
-    userID: "anon",
-    server: "http://localhost:4848",
-    schema,
-    mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
-    mutateURL: "http://localhost:3000/push",
-    onError,
-  });
-}
+const AtomBootstrapRuntime = Atom.runtime(Layer.empty);
 
-let z: ReturnType<typeof initZero>;
+const userIdAtom = AtomBootstrapRuntime.atom(Effect.sync(() => "anon"));
+const zeroAtom = AtomBootstrapRuntime.atom(
+  Effect.fn(function* (get) {
+    const userId = yield* get.result(userIdAtom);
+    const z = new Zero({
+      userID: userId,
+      server: "http://localhost:4848",
+      schema,
+      mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
+      mutateURL: "http://localhost:3000/push",
+      onError,
+    });
+    // get.addFinalizer(() => {
+    //   console.log("closing zero");
+    //   z.close();
+    // });
+    return z;
+  }),
+);
 
-function waitForLastItem<A, E, R>(stream: Stream.Stream<A, E, R>) {
-  return pipe(
+// const AtomRuntime = Atom.runtime(Layer.effect(zeroClient.ZeroProvider, Atom.getResult(zeroAtom)));
+
+let z: Atom.Success<typeof zeroAtom>;
+
+const waitForLastItem = Effect.fn("waitForLastItem")(function* <A, E, R>(stream: Stream.Stream<A, E, R>) {
+  return yield* pipe(
     stream,
-    Stream.timeout(Duration.millis(100)),
+    Stream.timeout(Duration.millis(1000)),
     Stream.runLast,
     Effect.map(Option.getOrThrowWith(() => new Error("No items received from server"))),
-    Effect.scoped,
   );
-}
+});
 
 let responses = Chunk.empty<ZeroPushResponse>();
 
@@ -229,9 +267,25 @@ beforeAll(async () => {
           HttpServerResponse.setHeader("content-type", "application/json"),
         );
       }).pipe(
-        Effect.catchAll((e) =>
-          Effect.gen(function* () {
-            yield* Console.error("Push processor error:", e);
+        Effect.catchAllCause(
+          Effect.fn(function* (c) {
+            yield* Effect.logError("Push processor error:", c);
+            return HttpServerResponse.empty({ status: 500 });
+          }),
+        ),
+      ),
+    ),
+    HttpRouter.post(
+      "/get-queries",
+      Effect.gen(function* () {
+        const payload = yield* HttpServerRequest.schemaBodyJson(ZeroTransformRequestMessage);
+        yield* Console.log("get-queries payload:", payload);
+        const response = yield* ZeroQueries.handleGetQueries(queries, schema, payload);
+        return yield* HttpServerResponse.json(response);
+      }).pipe(
+        Effect.catchAllCause(
+          Effect.fn(function* (c) {
+            yield* Effect.logError("get-queries error:", c);
             return HttpServerResponse.empty({ status: 500 });
           }),
         ),
@@ -259,10 +313,7 @@ beforeEach(async () => {
 
   responses = Chunk.empty<ZeroPushResponse>();
 
-  if (z) {
-    await z.close();
-  }
-  z = initZero();
+  z = pipe(Atom.getResult(zeroAtom), Effect.provide(Registry.layer), Effect.runSync);
 
   const c = await ddb
     .select({ count: count() })
@@ -277,11 +328,15 @@ beforeEach(async () => {
       Subscribable.unwrap(sub).changes,
       Stream.filter((d) => d.status === "complete"),
       waitForLastItem,
-      Effect.andThen((d) => Effect.fail(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
+      Effect.tap((d) => Effect.fail(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
       Effect.scoped,
       Effect.runPromise,
     );
   }
+});
+
+afterEach(async () => {
+  await z?.close();
 });
 
 test("server is running", async () => {
@@ -347,6 +402,7 @@ test("rows are returned after data is inserted", async () => {
       Subscribable.unwrap(sub).changes,
       Stream.filter((d) => d.status === "complete"),
       waitForLastItem,
+      Effect.scoped,
       Effect.runPromise,
     );
 
@@ -364,6 +420,7 @@ test("rows are returned after data is inserted", async () => {
       Subscribable.unwrap(sub).changes,
       Stream.filter((d) => d.status === "complete"),
       waitForLastItem,
+      Effect.scoped,
       Effect.runPromise,
     );
 
@@ -548,4 +605,55 @@ test("non-existing mutator should reject", async () => {
 
 test("concurrent transactions should be resolved", async () => {
   await expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined();
+});
+
+test.only("synced queries", async () => {
+  const item: Message = { id: nanoid(), body: "Hello, world!" };
+
+  const atom = Atom.make(
+    Effect.fn(function* (get) {
+      return yield* get.result(zeroClient.queryAtom(yield* myMessages(item.id)));
+    }),
+  );
+
+  await ddb.insert(messages).values(item);
+
+  const result = await pipe(
+    Atom.toStreamResult(atom),
+    waitForLastItem,
+    Effect.provideService(zeroClient.ZeroProvider, z),
+    Effect.provide(Registry.layer),
+    Effect.runPromise,
+  );
+
+  expect(result).toEqual([item]);
+});
+
+test("test", async () => {
+  const builder = createBuilder(schema);
+
+  await pipe(
+    Effect.gen(function* () {
+      const q2 = syncedQuery("q1", undefined, (a) => builder.messages);
+
+      // const view = z.materialize(yield* q1("test"));
+      // const view = (yield* q1("test")).materialize();
+
+      // view.addListener((d) => {
+      //   console.log("q1:", d);
+      // });
+
+      // const view2 = z.materialize(q2("test"));
+      const view2 = q2("test").materialize();
+
+      view2.addListener((d) => {
+        console.log("q2:", d);
+      });
+
+      yield* Effect.promise(() => ddb.insert(messages).values({ id: "test", body: "hello world" }));
+
+      yield* Effect.sleep(Duration.millis(1000));
+    }),
+    Effect.runPromise,
+  );
 });
