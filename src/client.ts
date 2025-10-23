@@ -1,7 +1,14 @@
 import { Atom } from "@effect-atom/atom";
-import type { AtomRuntime } from "@effect-atom/atom/Atom";
 import type { AtomRegistry } from "@effect-atom/atom/Registry";
-import type { HumanReadable, Query, ReadonlyJSONValue, Transaction, Zero, Schema as ZeroSchema } from "@rocicorp/zero";
+import type {
+  CustomMutatorDefs,
+  HumanReadable,
+  ReadonlyJSONValue,
+  Transaction,
+  Zero,
+  Query as ZeroQuery,
+  Schema as ZeroSchema,
+} from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -15,7 +22,7 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -25,6 +32,7 @@ import {
   type ExtractMutatorsRequirements,
   MutatorArgsSchemaSym,
 } from "./mutators.js";
+import { delegateSymbol, type Query } from "./queries.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 import { prefixId } from "./utils.js";
 
@@ -35,9 +43,10 @@ export interface ZeroClientTransaction {
   readonly _tag: unique symbol;
 }
 
-export interface ZeroClientProvider {
-  readonly _tag: unique symbol;
-}
+export class ZeroClientProvider extends Context.Tag(prefixId("ZeroClientProvider"))<
+  ZeroClientProvider,
+  Effect.Effect<Zero<ZeroSchema, CustomMutatorDefs | undefined>, never, Scope.Scope | AtomRegistry>
+>() {}
 
 export const makeClient = <S extends ZeroSchema>() => {
   // TODO: Maybe prefix this / suffix this with a tag passed in to `make`?
@@ -81,20 +90,17 @@ export const makeClient = <S extends ZeroSchema>() => {
     ) as UnwrapMutators<S, T>;
   });
 
-  const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) {
+  const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: ZeroQuery<S, T, R>) {
     const view = yield* Effect.acquireRelease(
       Effect.gen(function* () {
         if (Predicate.hasProperty(query, "_delegate") && query._delegate !== undefined) {
           return yield* Effect.sync(() => query.materialize());
         }
-        const zero = yield* Effect.serviceOption(ZeroClientProvider).pipe(
-          Effect.map(
-            Option.getOrThrowWith(
-              () =>
-                new Error("unable to materialize query, because it has no delegate, and ZeroProvider was not provided"),
-            ),
+        const zero = yield* (query as Query)[delegateSymbol].pipe(
+          Option.getOrThrowWith(
+            () =>
+              new Error("unable to materialize query, because it has no delegate, and ZeroProvider was not provided"),
           ),
-          Effect.flatten,
         );
         return yield* Effect.sync(() => {
           return zero.materialize(query);
@@ -106,7 +112,12 @@ export const makeClient = <S extends ZeroSchema>() => {
     const subscriptionRef = yield* SubscriptionRef.make<QueryResult<R>>(getDefaultSnapshot(query.format.singular));
 
     yield* Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
-      Effect.sync(() => view.addListener((...args) => emit.single(args))),
+      Effect.sync(() =>
+        view.addListener((...args) => {
+          console.log("addListener", args);
+          emit.single(args);
+        }),
+      ),
     ).pipe(
       Stream.mapEffect(([data, resultType]) =>
         Effect.sync(() => {
@@ -128,37 +139,16 @@ export const makeClient = <S extends ZeroSchema>() => {
   });
 
   /** Create an Atom for the query */
-  // const queryAtom = Atom.family(<T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) => {
-  //   return Atom.subscribable(querySub<T, R>(query)).pipe(Atom.mapResult((res) => res.data));
-  // });
-  const queryAtom = Atom.family(
-    <T extends keyof S["tables"] & string, R>({
-      runtime,
-      query,
-    }: {
-      runtime: AtomRuntime<ZeroClientProvider>;
-      query: Query<S, T, R>;
-    }) => {
-      return runtime
-        .subscribable(
-          Effect.fn(function* (get) {
-            const scope = yield* Scope.make();
-            get.addFinalizer(() => {
-              Scope.close(scope, Exit.void).pipe(Effect.runPromise);
-            });
-            return yield* querySub(query).pipe(Scope.extend(scope));
-          }),
-        )
-        .pipe(Atom.mapResult((res) => res.data));
-    },
-  );
+  const queryAtom = Atom.family(<T extends keyof S["tables"] & string, R>(query: ZeroQuery<S, T, R>) => {
+    return Atom.subscribable(querySub<T, R>(query)).pipe(Atom.mapResult((res) => res.data));
+  });
 
   return {
     unwrapMutators,
     querySub,
     queryAtom,
     Transaction: Object.assign(ZeroClientTransaction, { use }),
-    ZeroProvider: ZeroClientProvider,
+    ZeroClientProvider,
   };
 };
 

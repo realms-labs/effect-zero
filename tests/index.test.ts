@@ -203,7 +203,7 @@ const onError = vi.fn((...args) => console.error("onError:", ...args));
 
 const AtomRuntime: Atom.AtomRuntime<ZeroClient.ZeroClientProvider> = Atom.runtime(
   Layer.succeed(
-    zeroClient.ZeroProvider,
+    zeroClient.ZeroClientProvider,
     Effect.suspend(() => Atom.getResult(zeroAtom)),
   ),
 );
@@ -211,6 +211,7 @@ const AtomRuntime: Atom.AtomRuntime<ZeroClient.ZeroClientProvider> = Atom.runtim
 const userIdAtom = AtomRuntime.atom(Effect.sync(() => "anon"));
 const zeroAtom = AtomRuntime.atom(
   Effect.fn(function* (get) {
+    yield* Console.log("creating zero");
     const userId = yield* get.result(userIdAtom);
     const z = new Zero({
       userID: userId,
@@ -221,28 +222,30 @@ const zeroAtom = AtomRuntime.atom(
       onError,
     });
     get.addFinalizer(() => {
-      console.log("closing zero");
-      z.close();
+      console.log("zeroAtom finalizer");
+      // z.close();
     });
 
-    // const c = yield* Effect.promise(() =>
-    //   ddb
-    //     .select({ count: count() })
-    //     .from(messages)
-    //     .then((r) => r[0]!.count),
-    // );
-    // if (c > 0) {
-    //   yield* Effect.promise(() => rawDb`truncate table messages`);
+    const c = yield* Effect.promise(() =>
+      ddb
+        .select({ count: count() })
+        .from(messages)
+        .then((r) => r[0]!.count),
+    );
+    if (c > 0) {
+      yield* Effect.promise(() => rawDb`truncate table messages`);
 
-    //   // Wait until view is synced after truncation
-    //   const sub = yield* zeroClient.querySub(z.query.messages);
-    //   yield* pipe(
-    //     Stream.filter(sub.changes, (d) => d.status === "complete"),
-    //     waitForLastItem,
-    //     Effect.tap((d) => Effect.die(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
-    //     Effect.scoped,
-    //   );
-    // }
+      // Wait until view is synced after truncation
+      // const sub = yield* zeroClient.querySub(z.query.messages);
+
+      // yield* pipe(
+      //   sub.changes,
+      //   Stream.filter((d) => d.status === "complete"),
+      //   waitForLastItem,
+      //   Effect.tap((d) => Effect.die(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
+      //   Effect.scoped,
+      // );
+    }
     return z;
   }),
 );
@@ -253,6 +256,7 @@ const waitForLastItem = Effect.fn("waitForLastItem")(function* <A, E, R>(stream:
     Stream.timeout(Duration.millis(1000)),
     Stream.runLast,
     Effect.map(Option.getOrThrowWith(() => new Error("No items received from server"))),
+    Effect.tap(Console.log("waitForLastItem done")),
   );
 });
 
@@ -322,10 +326,6 @@ beforeEach(async () => {
 
   responses = Chunk.empty<ZeroPushResponse>();
 });
-
-// afterEach(async () => {
-//   await z?.close();
-// });
 
 test("server is running", async () => {
   const response = await fetch("http://localhost:3000/health");
@@ -598,14 +598,11 @@ test("concurrent transactions should be resolved", async () => {
 test.only("synced queries", async () => {
   const item: Message = { id: nanoid(), body: "Hello, world!" };
 
-  const atom = Atom.make(
+  const atom = AtomRuntime.atom(
     Effect.fn(function* (get) {
-      return yield* get.result(
-        zeroClient.queryAtom({
-          runtime: AtomRuntime,
-          query: yield* myMessages(item.id),
-        }),
-      );
+      yield* Console.log("creating query");
+      const q = yield* myMessages(item.id);
+      return yield* get.result(zeroClient.queryAtom(q));
     }),
   );
 
@@ -614,6 +611,8 @@ test.only("synced queries", async () => {
   const result = await pipe(
     Atom.toStreamResult(atom),
     waitForLastItem,
+    // Atom.getResult(atom),
+    Effect.tap(Console.log("last atom value retrieved")),
     Effect.provide(Registry.layer),
     Effect.runPromise,
   );

@@ -1,17 +1,26 @@
-import { type AnyQuery, type ReadonlyJSONValue, syncedQuery, type Schema as ZeroSchema } from "@rocicorp/zero";
+import type { AnyQuery, ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
 import { handleGetQueriesRequest } from "@rocicorp/zero/server";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import "effect/Context";
+import * as Console from "effect/Console";
 import * as Option from "effect/Option";
 import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
+import { ZeroClientProvider } from "./client.js";
 import type { ZeroTransformRequestMessage } from "./types/queries.js";
 import { prefixId } from "./utils.js";
+
+export const delegateSymbol = Symbol.for(prefixId("queryDelegate"));
+
+export type Query<Q extends AnyQuery = AnyQuery> = Q & {
+  [delegateSymbol]: Option.Option<ZeroClientProvider["Type"]>;
+};
 
 export const makeQuery = <
   N extends string,
@@ -27,8 +36,16 @@ export const makeQuery = <
   query: (...args: NoInfer<B>) => Effect.Effect<Q, E, R2>;
 }) => {
   return Effect.fn(function* (...args: A) {
+    yield* Console.log("retrieving zero");
+    const zero = yield* Effect.serviceOption(ZeroClientProvider);
     const parsed = yield* Schema.decode(options.payload)(args);
-    return yield* options.query(...parsed).pipe(Effect.map((query) => query.nameAndArgs(options.name, parsed) as Q));
+    return yield* options.query(...parsed).pipe(
+      Effect.map((query) => {
+        query = query.nameAndArgs(options.name, parsed) as Q;
+        (query as Query<Q>)[delegateSymbol] = zero;
+        return query;
+      }),
+    );
   });
 };
 
