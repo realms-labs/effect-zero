@@ -11,6 +11,7 @@ import type {
 } from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
 import * as Cause from "effect/Cause";
+import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -93,6 +94,7 @@ export const makeClient = <S extends ZeroSchema>() => {
   const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: ZeroQuery<S, T, R>) {
     const view = yield* Effect.acquireRelease(
       Effect.gen(function* () {
+        yield* Console.log(new Date(), "creating view");
         if (Predicate.hasProperty(query, "_delegate") && query._delegate !== undefined) {
           return yield* Effect.sync(() => query.materialize());
         }
@@ -106,18 +108,23 @@ export const makeClient = <S extends ZeroSchema>() => {
           return zero.materialize(query);
         });
       }),
-      (view) => Effect.sync(() => view.destroy()),
+      (view) =>
+        Effect.sync(() => {
+          console.log(new Date(), "destroying view");
+          view.destroy();
+        }),
     );
 
     const subscriptionRef = yield* SubscriptionRef.make<QueryResult<R>>(getDefaultSnapshot(query.format.singular));
 
     yield* Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
-      Effect.sync(() =>
-        view.addListener((...args) => {
-          console.log("addListener", args);
+      Effect.sync(() => {
+        console.log(new Date(), "invoking addListener");
+        return view.addListener((...args) => {
+          console.log(new Date(), "view listener", args);
           emit.single(args);
-        }),
-      ),
+        });
+      }),
     ).pipe(
       Stream.mapEffect(([data, resultType]) =>
         Effect.sync(() => {

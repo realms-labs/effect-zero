@@ -222,7 +222,7 @@ const zeroAtom = AtomRuntime.atom(
       onError,
     });
     get.addFinalizer(() => {
-      console.log("zeroAtom finalizer");
+      console.log(new Date(), "zeroAtom finalizer");
       // z.close();
     });
 
@@ -253,7 +253,7 @@ const zeroAtom = AtomRuntime.atom(
 const waitForLastItem = Effect.fn("waitForLastItem")(function* <A, E, R>(stream: Stream.Stream<A, E, R>) {
   return yield* pipe(
     stream,
-    Stream.timeout(Duration.millis(1000)),
+    Stream.timeout(Duration.millis(100)),
     Stream.runLast,
     Effect.map(Option.getOrThrowWith(() => new Error("No items received from server"))),
     Effect.tap(Console.log("waitForLastItem done")),
@@ -417,49 +417,53 @@ test("rows are returned after data is inserted", async () => {
   }
 });
 
-test("atom is set to correct value", async () => {
-  const atom = zeroClient.queryAtom(z.query.messages);
+test.only("atom is set to correct value", async () => {
+  await pipe(
+    Effect.gen(function* () {
+      const z = yield* Atom.getResult(zeroAtom);
 
-  {
-    const result = atom.pipe(Atom.get, Effect.provide(Registry.layer), Effect.runSync, Result.getOrThrow);
+      const atom = zeroClient.queryAtom(z.query.messages);
 
-    expect(result).toEqual([]);
-  }
+      {
+        const result = yield* Atom.getResult(atom);
 
-  const value1 = {
-    id: nanoid(),
-    body: "hello world",
-  };
-  await ddb.insert(messages).values(value1);
+        expect(result).toEqual([]);
+      }
 
-  {
-    const result = await pipe(
-      Atom.toStreamResult(atom),
-      waitForLastItem,
-      Effect.provide(Registry.layer),
-      Effect.runPromise,
-    );
+      const value1 = {
+        id: nanoid(),
+        body: "hello world",
+      };
+      yield* Effect.promise(() => ddb.insert(messages).values(value1));
 
-    expect(result).toEqual([value1]);
-  }
+      // const stream = Atom.toStreamResult(atom);
 
-  const value2 = {
-    id: nanoid(),
-    body: "hello world 2",
-  };
-  await ddb.insert(messages).values(value2);
+      {
+        // const result = yield* pipe(stream, waitForLastItem);
+        yield* Effect.sleep(Duration.millis(100));
+        const result = yield* Atom.getResult(atom);
 
-  {
-    const result = await pipe(
-      Atom.toStreamResult(atom),
-      waitForLastItem,
-      Effect.provide(Registry.layer),
-      Effect.runPromise,
-    );
+        expect(result).toEqual([value1]);
+      }
 
-    expect(result).toBeArrayOfSize(2);
-    expect(result).toContainAllValues([value1, value2]);
-  }
+      const value2 = {
+        id: nanoid(),
+        body: "hello world 2",
+      };
+      yield* Effect.promise(() => ddb.insert(messages).values(value2));
+
+      {
+        // const result = yield* pipe(stream, waitForLastItem);
+        yield* Effect.sleep(Duration.millis(100));
+        const result = yield* Atom.getResult(atom);
+
+        expect(result).toBeArrayOfSize(2);
+        expect(result).toContainAllValues([value1, value2]);
+      }
+    }),
+    Effect.provide(Registry.layer),
+    Effect.runPromise,
+  );
 });
 
 test("custom mutators work", async () => {
@@ -595,13 +599,15 @@ test("concurrent transactions should be resolved", async () => {
   await expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined();
 });
 
-test.only("synced queries", async () => {
+test("synced queries", async () => {
   const item: Message = { id: nanoid(), body: "Hello, world!" };
 
-  const atom = AtomRuntime.atom(
+  const atom = Atom.make(
     Effect.fn(function* (get) {
       yield* Console.log("creating query");
-      const q = yield* myMessages(item.id);
+      const q = yield* myMessages(item.id).pipe(
+        Effect.provideService(zeroClient.ZeroClientProvider, get.result(zeroAtom)),
+      );
       return yield* get.result(zeroClient.queryAtom(q));
     }),
   );
@@ -611,7 +617,6 @@ test.only("synced queries", async () => {
   const result = await pipe(
     Atom.toStreamResult(atom),
     waitForLastItem,
-    // Atom.getResult(atom),
     Effect.tap(Console.log("last atom value retrieved")),
     Effect.provide(Registry.layer),
     Effect.runPromise,
