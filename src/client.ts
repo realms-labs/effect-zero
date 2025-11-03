@@ -44,6 +44,11 @@ export interface ZeroClientTransaction {
   readonly _tag: unique symbol;
 }
 
+/** @internal
+ * This definition of ZeroClientProvider is needed to allow usage of it outside of the ZeroClient context, specifically inside `makeQuery`, where ZeroClient isn't available.
+ * At the same time, a definition of ZeroClientProvider inside `makeClient` is needed to make sure it only accepts the Zero client initialized with the same schema as the client,
+ * and that's the instance that should be used by end users.
+ */
 export class ZeroClientProvider extends Context.Tag(prefixId("ZeroClientProvider"))<
   ZeroClientProvider,
   Effect.Effect<Zero<ZeroSchema, CustomMutatorDefs | undefined>, never, Scope.Scope | AtomRegistry>
