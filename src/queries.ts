@@ -1,25 +1,28 @@
-import type { AnyQuery, ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
+import type { AtomRegistry } from "@effect-atom/atom/Registry";
+import type { AnyQuery, CustomMutatorDefs, ReadonlyJSONValue, Zero, Schema as ZeroSchema } from "@rocicorp/zero";
 import { handleGetQueriesRequest } from "@rocicorp/zero/server";
 import * as Cause from "effect/Cause";
+import * as Console from "effect/Console";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import "effect/Context";
-import * as Console from "effect/Console";
 import * as Option from "effect/Option";
 import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { ZeroClientProvider } from "./client.js";
 import type { ZeroTransformRequestMessage } from "./types/queries.js";
 import { prefixId } from "./utils.js";
 
-export const delegateSymbol = Symbol.for(prefixId("queryDelegate"));
+export const queryDelegateSymbol = Symbol.for(prefixId("queryDelegate"));
 
 export type Query<Q extends AnyQuery = AnyQuery> = Q & {
-  [delegateSymbol]: Option.Option<ZeroClientProvider["Type"]>;
+  [queryDelegateSymbol]: Option.Option<
+    Effect.Effect<Zero<ZeroSchema, CustomMutatorDefs | undefined>, never, AtomRegistry>
+  >;
 };
 
 export const makeQuery = <
@@ -37,12 +40,13 @@ export const makeQuery = <
 }) => {
   return Effect.fn(function* (...args: A) {
     yield* Console.log("retrieving zero");
-    const zero = yield* Effect.serviceOption(ZeroClientProvider);
+    const scope = yield* Effect.scope;
+    const zero = yield* Effect.serviceOption(ZeroClientProvider).pipe(Effect.map(Option.map(Scope.extend(scope))));
     const parsed = yield* Schema.decode(options.payload)(args);
     return yield* options.query(...parsed).pipe(
       Effect.map((query) => {
         query = query.nameAndArgs(options.name, parsed) as Q;
-        (query as Query<Q>)[delegateSymbol] = zero;
+        (query as Query<Q>)[queryDelegateSymbol] = zero;
         return query;
       }),
     );
@@ -55,7 +59,7 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   schema: ZeroSchema,
   payload: ZeroTransformRequestMessage,
 ) {
-  const runtime = yield* Effect.runtime<R1 | R2>();
+  const runtime = yield* Effect.runtime<R1 | R2 | Scope.Scope>();
   return yield* Effect.tryPromise({
     try: () =>
       handleGetQueriesRequest(

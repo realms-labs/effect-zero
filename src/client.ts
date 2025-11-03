@@ -33,7 +33,7 @@ import {
   type ExtractMutatorsRequirements,
   MutatorArgsSchemaSym,
 } from "./mutators.js";
-import { delegateSymbol, type Query } from "./queries.js";
+import { type Query, queryDelegateSymbol } from "./queries.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 import { prefixId } from "./utils.js";
 
@@ -98,11 +98,9 @@ export const makeClient = <S extends ZeroSchema>() => {
         if (Predicate.hasProperty(query, "_delegate") && query._delegate !== undefined) {
           return yield* Effect.sync(() => query.materialize());
         }
-        const zero = yield* (query as Query)[delegateSymbol].pipe(
-          Option.getOrThrowWith(
-            () =>
-              new Error("unable to materialize query, because it has no delegate, and ZeroProvider was not provided"),
-          ),
+        const zero = yield* (query as Query)[queryDelegateSymbol].pipe(
+          Effect.flatten,
+          Effect.catchTag("NoSuchElementException", () => new ZeroQueryDelegateNotFoundError()),
         );
         return yield* Effect.sync(() => {
           return zero.materialize(query);
@@ -176,3 +174,7 @@ export class ZeroClientTransactionError extends Data.TaggedError("ZeroClientTran
 export class ZeroClientArgsParseError extends Data.TaggedError("ZeroClientArgsParseError")<{
   cause: Cause.Cause<ParseResult.ParseError>;
 }> {}
+
+export class ZeroQueryDelegateNotFoundError extends Data.TaggedError("ZeroQueryDelegateNotFoundError") {
+  override message = "unable to materialize query, because it has no delegate, and ZeroProvider was not provided";
+}
