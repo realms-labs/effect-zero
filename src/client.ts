@@ -17,7 +17,6 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
@@ -33,7 +32,7 @@ import {
   type ExtractMutatorsRequirements,
   MutatorArgsSchemaSym,
 } from "./mutators.js";
-import { type Query, queryDelegateSymbol } from "./queries.js";
+import { type Query, queryDelegateSymbol } from "./queries/index.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 import { prefixId } from "./utils.js";
 
@@ -99,7 +98,7 @@ export const makeClient = <S extends ZeroSchema>() => {
   const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: ZeroQuery<S, T, R>) {
     const view = yield* Effect.acquireRelease(
       Effect.gen(function* () {
-        yield* Console.log(new Date(), "creating view");
+        yield* Console.log(new Date(), "creating view for query", query);
         if (Predicate.hasProperty(query, "_delegate") && query._delegate !== undefined) {
           return yield* Effect.sync(() => query.materialize());
         }
@@ -113,7 +112,7 @@ export const makeClient = <S extends ZeroSchema>() => {
       }),
       (view) =>
         Effect.sync(() => {
-          console.log(new Date(), "destroying view");
+          console.log(new Date(), "destroying view of query", query, view);
           view.destroy();
         }),
     );

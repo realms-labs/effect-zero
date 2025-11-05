@@ -18,8 +18,11 @@ const glob = new Glob("src/**/*.ts");
 const exports: Record<string, { import: { types: string; default: string } }> = {};
 for await (const filePath of glob.scan({ absolute: true })) {
   const relPath = path.relative("src", filePath);
-  const importPath = relPath.replace(/\.ts$/, "");
+  let importPath = relPath.replace(/\.ts$/, "");
   const basePath = path.join(tsOutDir, importPath);
+  if (importPath.endsWith("/index")) {
+    importPath = importPath.replace(/\/index$/, "");
+  }
   exports[`./${importPath}`] = { import: { types: `./${basePath}.d.ts`, default: `./${basePath}.js` } };
 }
 packageJson.exports = exports;

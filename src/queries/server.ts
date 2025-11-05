@@ -1,8 +1,5 @@
-import type { AtomRegistry } from "@effect-atom/atom/Registry";
-import type { AnyQuery, CustomMutatorDefs, ReadonlyJSONValue, Zero, Schema as ZeroSchema } from "@rocicorp/zero";
-import { handleGetQueriesRequest } from "@rocicorp/zero/server";
+import type { AnyQuery, ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
-import * as Console from "effect/Console";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -11,47 +8,9 @@ import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
-import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
-import { ZeroClientProvider } from "./client.js";
-import type { ZeroTransformRequestMessage } from "./types/queries.js";
-import { prefixId } from "./utils.js";
-
-export const queryDelegateSymbol = Symbol.for(prefixId("queryDelegate"));
-
-export type Query<Q extends AnyQuery = AnyQuery> = Q & {
-  [queryDelegateSymbol]: Option.Option<
-    Effect.Effect<Zero<ZeroSchema, CustomMutatorDefs | undefined>, never, AtomRegistry>
-  >;
-};
-
-export const makeQuery = <
-  N extends string,
-  A extends ReadonlyJSONValue[],
-  B extends ReadonlyJSONValue[],
-  Q extends AnyQuery,
-  E,
-  R1,
-  R2,
->(options: {
-  name: N;
-  payload: Schema.Schema<readonly [...B], readonly [...A], R1>;
-  query: (...args: NoInfer<B>) => Effect.Effect<Q, E, R2>;
-}) => {
-  return Effect.fn(function* (...args: A) {
-    yield* Console.log("retrieving zero");
-    const scope = yield* Effect.scope;
-    const zero = yield* Effect.serviceOption(ZeroClientProvider).pipe(Effect.map(Option.map(Scope.extend(scope))));
-    const parsed = yield* Schema.decode(options.payload)(args);
-    return yield* options.query(...parsed).pipe(
-      Effect.map((query) => {
-        query = query.nameAndArgs(options.name, parsed) as Q;
-        (query as Query<Q>)[queryDelegateSymbol] = zero;
-        return query;
-      }),
-    );
-  });
-};
+import type { ZeroTransformRequestMessage } from "../types/queries.js";
+import { prefixId } from "../utils.js";
+import type { makeQuery } from "./index.js";
 
 export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   // biome-ignore lint/suspicious/noExplicitAny: accept any query
@@ -59,13 +18,14 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   schema: ZeroSchema,
   payload: ZeroTransformRequestMessage,
 ) {
-  const runtime = yield* Effect.runtime<R1 | R2 | Scope.Scope>();
+  const runtime = yield* Effect.runtime<R1 | R2>();
+  const { handleGetQueriesRequest } = yield* Effect.promise(() => import("@rocicorp/zero/server"));
   return yield* Effect.tryPromise({
     try: () =>
       handleGetQueriesRequest(
         (name, args) =>
           Rec.get(queries, name).pipe(
-            Effect.catchTag("NoSuchElementException", () => new QueryNotFound()),
+            Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ queryName: name })),
             Effect.flatMap((query) => query(...args)),
             Effect.map((query) => ({ query })),
             (effect) => Runtime.runPromiseExit(runtime, effect),
@@ -87,7 +47,11 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   });
 });
 
-class QueryNotFound extends Data.TaggedError("QueryNotFound") {}
+class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ queryName: string }> {
+  override get message() {
+    return `Query not found: ${this.queryName}`;
+  }
+}
 
 const QueryUserErrorTypeId = Symbol.for(prefixId("QueryUserError"));
 class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{
