@@ -1,5 +1,7 @@
 import type { AnyQuery, ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
+import { handleGetQueriesRequest } from "@rocicorp/zero/server";
 import * as Cause from "effect/Cause";
+import * as Console from "effect/Console";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -19,7 +21,6 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   payload: ZeroTransformRequestMessage,
 ) {
   const runtime = yield* Effect.runtime<R1 | R2>();
-  const { handleGetQueriesRequest } = yield* Effect.promise(() => import("@rocicorp/zero/server"));
   return yield* Effect.tryPromise({
     try: () =>
       handleGetQueriesRequest(

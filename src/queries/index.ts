@@ -1,6 +1,7 @@
 import type { AnyQuery, ReadonlyJSONValue } from "@rocicorp/zero";
-import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
+import * as Hash from "effect/Hash";
 import type * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { ZeroClientProvider } from "../client.js";
@@ -26,13 +27,21 @@ export const makeQuery = <
   query: (...args: NoInfer<B>) => Effect.Effect<Q, E, R2>;
 }) => {
   return Effect.fn(function* (...args: A) {
-    yield* Console.log("retrieving zero");
     const zero = yield* Effect.serviceOption(ZeroClientProvider);
     const parsed = yield* Schema.decode(options.payload)(args);
     return yield* options.query(...parsed).pipe(
       Effect.map((query) => {
         query = query.nameAndArgs(options.name, parsed) as Q;
         (query as Query<Q>)[queryDelegateSymbol] = zero;
+        (query as typeof query & Hash.Hash)[Hash.symbol] = function () {
+          return Hash.hash(this.hash());
+        };
+        (query as typeof query & Equal.Equal)[Equal.symbol] = function (that) {
+          if (Hash.isHash(that)) {
+            return Equal.equals(this[Hash.symbol](), that[Hash.symbol]());
+          }
+          return false;
+        };
         return query;
       }),
     );

@@ -201,7 +201,7 @@ const zeroServer = ZeroServer.makeServer({
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
-const AtomRuntime: Atom.AtomRuntime<ZeroClient.ZeroClientProvider> = Atom.runtime(
+const AtomRuntime: Atom.AtomRuntime<typeof zeroClient.ZeroClientProvider> = Atom.runtime(
   Layer.succeed(
     zeroClient.ZeroClientProvider,
     Effect.suspend(() => Atom.getResult(zeroAtom)),

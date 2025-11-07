@@ -17,6 +17,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
@@ -50,7 +51,7 @@ export interface ZeroClientTransaction {
  */
 export class ZeroClientProvider extends Context.Tag(prefixId("ZeroClientProvider"))<
   ZeroClientProvider,
-  Effect.Effect<Zero<ZeroSchema, CustomMutatorDefs | undefined>, never, Scope.Scope | AtomRegistry>
+  Effect.Effect<Zero<ZeroSchema, CustomMutatorDefs | undefined>, unknown, Scope.Scope | AtomRegistry>
 >() {}
 
 export const makeClient = <S extends ZeroSchema>() => {
@@ -59,7 +60,7 @@ export const makeClient = <S extends ZeroSchema>() => {
 
   const ZeroClientProvider = Context.Tag(prefixId("ZeroClientProvider"))<
     ZeroClientProvider,
-    Effect.Effect<Zero<S>, never, Scope.Scope | AtomRegistry>
+    Effect.Effect<Zero<S>, unknown, Scope.Scope | AtomRegistry>
   >();
 
   const use = <A>(fn: (transaction: Transaction<S>, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
@@ -98,22 +99,25 @@ export const makeClient = <S extends ZeroSchema>() => {
   const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: ZeroQuery<S, T, R>) {
     const view = yield* Effect.acquireRelease(
       Effect.gen(function* () {
-        yield* Console.log(new Date(), "creating view for query", query);
+        yield* Console.log(new Date().toISOString(), "creating view for query", query.customQueryID);
         if (Predicate.hasProperty(query, "_delegate") && query._delegate !== undefined) {
           return yield* Effect.sync(() => query.materialize());
         }
+        console.log("retrieving zero in querySub");
         const zero = yield* (query as Query)[queryDelegateSymbol].pipe(
+          Option.map(Effect.catchAll((e) => new ZeroClientProviderError({ cause: Cause.fail(e) }))),
           Effect.flatten,
           Effect.catchTag("NoSuchElementException", () => new ZeroQueryDelegateNotFoundError()),
         );
+        console.log("retrieved zero in querySub");
         return yield* Effect.sync(() => {
           return zero.materialize(query);
         });
       }),
       (view) =>
         Effect.sync(() => {
-          console.log(new Date(), "destroying view of query", query, view);
-          view.destroy();
+          console.log(new Date().toISOString(), "destroying view of query", query.customQueryID);
+          // view.destroy();
         }),
     );
 
@@ -121,9 +125,9 @@ export const makeClient = <S extends ZeroSchema>() => {
 
     yield* Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
       Effect.sync(() => {
-        console.log(new Date(), "invoking addListener");
+        console.log(new Date().toISOString(), "invoking addListener of query", query.customQueryID);
         return view.addListener((...args) => {
-          console.log(new Date(), "view listener", args);
+          console.log(new Date().toISOString(), "view listener of query", query.customQueryID, args);
           emit.single(args);
         });
       }),
@@ -149,6 +153,7 @@ export const makeClient = <S extends ZeroSchema>() => {
 
   /** Create an Atom for the query */
   const queryAtom = Atom.family(<T extends keyof S["tables"] & string, R>(query: ZeroQuery<S, T, R>) => {
+    console.log("invoked queryAtom for query", query.customQueryID, "with hash", query.hash());
     return Atom.subscribable(querySub<T, R>(query)).pipe(Atom.mapResult((res) => res.data));
   });
 
@@ -181,4 +186,10 @@ export class ZeroClientArgsParseError extends Data.TaggedError("ZeroClientArgsPa
 
 export class ZeroQueryDelegateNotFoundError extends Data.TaggedError("ZeroQueryDelegateNotFoundError") {
   override message = "unable to materialize query, because it has no delegate, and ZeroProvider was not provided";
+}
+
+export class ZeroClientProviderError extends Data.TaggedError("ZeroClientProviderError")<{
+  cause: Cause.Cause<unknown>;
+}> {
+  override message = "error retrieving the ZeroClientProvider value";
 }
