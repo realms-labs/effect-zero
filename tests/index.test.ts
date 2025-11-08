@@ -32,7 +32,7 @@ import {
 } from "effect";
 import * as Predicate from "effect/Predicate";
 import * as ZeroClient from "effect-zero/client";
-import { MutatorSchema } from "effect-zero/mutators";
+import * as Mutators from "effect-zero/mutators";
 import * as ZeroServer from "effect-zero/server";
 import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "effect-zero/types";
 import { prefixId } from "effect-zero/utils";
@@ -50,7 +50,7 @@ const ddb = drizzle(rawDb);
 const connection = new PostgresJSConnection(rawDb);
 const database = new ZQLDatabase(connection, schema);
 
-const mutatorSchema = MutatorSchema.make({
+const mutatorSchema = Mutators.schema({
   messages: {
     create: Schema.Struct({
       id: Schema.String,
@@ -89,7 +89,7 @@ const transformArgsServer = vi.fn(
   }),
 );
 
-const clientMutators = mutatorSchema.makeMutators({
+const clientMutators = Mutators.make(mutatorSchema, {
   messages: {
     create: Effect.fn(function* (msg) {
       yield* zeroClient.Transaction.use(async (tx) => {
@@ -117,7 +117,7 @@ const clientMutators = mutatorSchema.makeMutators({
   concurrentTransactions: Effect.fn(function* () {}),
 });
 
-const serverMutators = mutatorSchema.makeMutators({
+const serverMutators = Mutators.make(mutatorSchema, {
   messages: {
     create: Effect.fn(function* (msg) {
       yield* clientMutators.messages.create(msg).pipe(zeroServer.Transaction.execute);
@@ -312,11 +312,11 @@ test("mutator requirements should propagate", () => {
     succeed: {},
   }) {}
 
-  const mutatorSchema = MutatorSchema.make({
+  const mutatorSchema = Mutators.schema({
     dummy: Schema.Void,
     dummy2: Schema.Void,
   });
-  const mutators = mutatorSchema.makeMutators({
+  const mutators = Mutators.make(mutatorSchema, {
     dummy: Effect.fn(function* () {
       yield* DummyTag;
     }),
@@ -525,10 +525,10 @@ test("out of order mutations should be rejected", async () => {
 });
 
 test("non-existing mutator should reject", async () => {
-  const mutatorSchema = MutatorSchema.make({
+  const mutatorSchema = Mutators.schema({
     nonExistingMutator: Schema.Void,
   });
-  const clientMutators = mutatorSchema.makeMutators({
+  const clientMutators = Mutators.make(mutatorSchema, {
     nonExistingMutator: Effect.fn(function* () {}),
   });
   const z = new Zero({

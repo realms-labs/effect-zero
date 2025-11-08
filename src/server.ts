@@ -17,7 +17,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { type AnyMutators, type ExtractMutatorsRequirements, MutatorArgsSchemaSym } from "./mutators.js";
+import { type AnyMutators, type ExtractMutatorsRequirements, MutatorSchemaSymbol } from "./mutators.js";
 import {
   type ZeroAppError,
   type ZeroError,
@@ -182,7 +182,7 @@ export const makeServer = <T, I = never>(options: { database: Database<T>; clien
         Effect.catchTag("NoSuchElementException", () => new MutatorNotFoundError({ mutationName: mutation.name })),
       );
 
-      const args = yield* Schema.decode(mutator[MutatorArgsSchemaSym])(mutation.args[0]).pipe(
+      const args = yield* Schema.decode(mutator[MutatorSchemaSymbol])(mutation.args[0]).pipe(
         Effect.catchTag("ParseError", (e) => new ZeroServerArgsParseError({ cause: Cause.fail(e) })),
       );
 

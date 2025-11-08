@@ -19,7 +19,7 @@ import {
   type AnyMutator,
   type AnyMutators,
   type ExtractMutatorsRequirements,
-  MutatorArgsSchemaSym,
+  MutatorSchemaSymbol,
 } from "./mutators.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 import { prefixId } from "./utils.js";
@@ -50,7 +50,7 @@ export const makeClient = <S extends ZeroSchema>() => {
 
     function unwrapMutator<E>(mutator: AnyMutator<ExtractMutatorsRequirements<T>, E>) {
       return async (tx: Transaction<S>, args: unknown) => {
-        const exit = await Schema.decode(mutator[MutatorArgsSchemaSym])(args).pipe(
+        const exit = await Schema.decode(mutator[MutatorSchemaSymbol])(args).pipe(
           Effect.catchTag("ParseError", (e) => new ZeroClientArgsParseError({ cause: Cause.fail(e) })),
           Effect.flatMap(mutator),
           Effect.provideService(ZeroClientTransaction, tx),
@@ -113,7 +113,7 @@ export const makeClient = <S extends ZeroSchema>() => {
 
 type UnwrapMutator<S extends ZeroSchema, T extends AnyMutator> = Parameters<T> extends []
   ? (transaction: Transaction<S>) => Promise<void>
-  : (transaction: Transaction<S>, args: Schema.Schema.Encoded<T[typeof MutatorArgsSchemaSym]>) => Promise<void>;
+  : (transaction: Transaction<S>, args: Schema.Schema.Encoded<T[typeof MutatorSchemaSymbol]>) => Promise<void>;
 
 export type UnwrapMutators<S extends ZeroSchema, T extends AnyMutators> = {
   [A in keyof T]: T[A] extends AnyMutator
