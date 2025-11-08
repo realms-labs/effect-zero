@@ -299,7 +299,7 @@ test("mutators should have correct argument types", () => {
   expectTypeOf<Parameters<typeof clientMutators.optionalVoidArg>>().toEqualTypeOf<[(void | undefined)?]>();
   expectTypeOf<Parameters<typeof clientMutators.throwsError>>().toEqualTypeOf<[]>();
   expectTypeOf<Parameters<typeof clientMutators.messages.create>>().toEqualTypeOf<
-    [Schema.Schema.Type<typeof mutatorSchema.schema.messages.create>]
+    [Schema.Schema.Type<typeof mutatorSchema.messages.create>]
   >();
 });
 
@@ -437,10 +437,10 @@ test("schema validation is applied to mutator arguments", async () => {
 
 test("schema transformations are applied to mutator arguments", async () => {
   expectTypeOf<Parameters<typeof z.mutate.transformArgs>>().toEqualTypeOf<
-    [Schema.Schema.Encoded<typeof mutatorSchema.schema.transformArgs>]
+    [Schema.Schema.Encoded<typeof mutatorSchema.transformArgs>]
   >();
   expectTypeOf<Parameters<typeof clientMutators.transformArgs>>().toEqualTypeOf<
-    [Schema.Schema.Type<typeof mutatorSchema.schema.transformArgs>]
+    [Schema.Schema.Type<typeof mutatorSchema.transformArgs>]
   >();
 
   await z.mutate.transformArgs({ foo: "1" }).server;
