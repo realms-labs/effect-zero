@@ -2,6 +2,7 @@ import type { TransactionProviderInput } from "@rocicorp/zero/server";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { prefixId } from "./utils.js";
@@ -11,21 +12,24 @@ export class ServerTransactionInput extends Context.Tag(prefixId("ServerTransact
   TransactionProviderInput
 >() {}
 
-export class ServerSynchronizationContext extends Effect.Service<ServerSynchronizationContext>()(
-  prefixId("ServerSynchronizationContext"),
-  {
-    effect: Effect.gen(function* () {
-      return { wasTransactionExecuted: yield* SynchronizedRef.make(false) };
+export class ServerSynchronizationContext extends Context.Tag(prefixId("ServerSynchronizationContext"))<
+  ServerSynchronizationContext,
+  { wasTransactionExecuted: SynchronizedRef.SynchronizedRef<boolean> }
+>() {
+  private static layer = Layer.effect(
+    this,
+    Effect.gen(function* () {
+      return {
+        wasTransactionExecuted: yield* SynchronizedRef.make(false),
+      };
     }),
-  },
-) {
-  static wasTransactionExecuted = Effect.flatMap(ServerSynchronizationContext, (ctx) => ctx.wasTransactionExecuted);
+  );
 
   // Ensures that only one transaction is executed at a time and checks that another transaction wasn't already executed.
   static guard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.flatMap(this, ({ wasTransactionExecuted }) =>
+    Effect.flatMap(this, (ctx) =>
       SynchronizedRef.modifyEffect(
-        wasTransactionExecuted,
+        ctx.wasTransactionExecuted,
         Effect.fn(function* (wasTransactionExecuted) {
           if (wasTransactionExecuted) {
             return yield* new MultipleTransactionsError();
@@ -37,29 +41,23 @@ export class ServerSynchronizationContext extends Effect.Service<ServerSynchroni
     );
 
   static finalize = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.flatMap(this.wasTransactionExecuted, (wasTransactionExecuted) =>
-      effect.pipe(
+    Effect.gen(this, function* () {
+      const wasTransactionExecuted = yield* this.pipe(Effect.flatMap((ctx) => ctx.wasTransactionExecuted));
+
+      return yield* effect.pipe(
         // Case #2 "One transaction then fail"
         // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
-        Effect.catchAllCause(
-          Effect.fn(function* (e) {
-            if (wasTransactionExecuted) {
-              return yield* Effect.logError("Error occurred after transaction execution completed", e);
-            }
-            return yield* Effect.failCause(e);
-          }),
-        ),
+        Effect.catchAllCause((e) => {
+          if (wasTransactionExecuted) {
+            return Effect.logError("Error occurred after transaction execution completed", e);
+          }
+          return Effect.failCause(e);
+        }),
         // Case #4 "Zero transactions then succeed"
         // Check that the transaction was executed during the mutation
-        Effect.tap(
-          Effect.gen(function* () {
-            if (!wasTransactionExecuted) {
-              return yield* new NoTransactionError();
-            }
-          }),
-        ),
-      ),
-    );
+        Effect.tap(!wasTransactionExecuted ? new NoTransactionError() : Effect.void),
+      );
+    }).pipe(Effect.provide(this.layer));
 }
 
 export class NoTransactionError extends Data.TaggedError("NoTransactionError") {}

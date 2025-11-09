@@ -22,7 +22,10 @@ import type * as ServerTransaction from "./server-transaction.js";
 import * as Types from "./types.js";
 import { prefixId } from "./utils.js";
 
-type ServerTransactionContext<TTransaction = unknown> = ReturnType<typeof ServerTransaction.make<string, TTransaction>>;
+type ServerTransactionContext<TTransaction = unknown> = Omit<
+  ReturnType<typeof ServerTransaction.make<string, TTransaction>>,
+  "use"
+>;
 
 export const processPush = Effect.fn(function* <TMutators extends Mutators.AnyMutators>(
   transaction: ServerTransactionContext,
@@ -102,7 +105,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     // Catches all errors that are produced before the transaction is executed
     Effect.catchAllCause((cause) => new MutationUserError({ cause })),
   );
-}, Effect.provide(ServerSynchronizationContext.Default));
+});
 
 const processMutationError = Effect.fn(function* (transaction: ServerTransactionContext, e: unknown) {
   const { clientID, mutationID } = yield* ServerTransactionInput;
