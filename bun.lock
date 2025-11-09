@@ -6,12 +6,12 @@
       "devDependencies": {
         "@arethetypeswrong/cli": "^0.18.2",
         "@biomejs/biome": "^2.2.6",
-        "@effect-atom/atom": "^0.3.3",
-        "@effect/language-service": "^0.45.1",
+        "@effect-atom/atom": "^0.4.0",
+        "@effect/language-service": "^0.55.2",
         "@rocicorp/zero": "^0.24.2025101500",
         "@types/bun": "latest",
         "@types/fs-extra": "^11.0.4",
-        "effect": "^3.18.4",
+        "effect": "^3.19.3",
         "fs-extra": "^11.3.2",
         "ts-patch": "^3.3.0",
         "typescript": "5.9.2",
@@ -69,11 +69,11 @@
 
     "@ecies/ciphers": ["@ecies/ciphers@0.2.4", "", { "peerDependencies": { "@noble/ciphers": "^1.0.0" } }, "sha512-t+iX+Wf5nRKyNzk8dviW3Ikb/280+aEJAnw9YXvCp2tYGPSkMki+NRY+8aNLmVFv3eNtMdvViPNOPxS8SZNP+w=="],
 
-    "@effect-atom/atom": ["@effect-atom/atom@0.3.3", "", { "peerDependencies": { "@effect/experimental": "^0.56.0", "@effect/platform": "^0.92.1", "@effect/rpc": "^0.71.0", "effect": "^3.18.4" } }, "sha512-hzsOARN/EGDO7Q7zG1wY1jv1MR8m7uWUNTXhV42NGw3z9CPaXt4yuhrqUQyaXvOYbthasSIHWAgnlPvDHrdrwg=="],
+    "@effect-atom/atom": ["@effect-atom/atom@0.4.0", "", { "peerDependencies": { "@effect/experimental": "^0.57.0", "@effect/platform": "^0.93.0", "@effect/rpc": "^0.72.1", "effect": "^3.19.0" } }, "sha512-iUr/C7HIAwwhrVjipbTtC+mWLQh1vjwwV2jQ1MdEaxully0yGa8cs3ZlvSoFH4UMGEQXYvOTkv0IKIabXi6Puw=="],
 
     "@effect/experimental": ["@effect/experimental@0.54.6", "", { "dependencies": { "uuid": "^11.0.3" }, "peerDependencies": { "@effect/platform": "^0.90.2", "effect": "^3.17.7", "ioredis": "^5", "lmdb": "^3" }, "optionalPeers": ["ioredis", "lmdb"] }, "sha512-UqHMvCQmrZT6kUVoUC0lqyno4Yad+j9hBGCdUjW84zkLwAq08tPqySiZUKRwY+Ae5B2Ab8rISYJH7nQvct9DMQ=="],
 
-    "@effect/language-service": ["@effect/language-service@0.45.1", "", { "bin": { "effect-language-service": "cli.js" } }, "sha512-SEZ9TaVCpRKYumTQJPApg3os9O94bN2lCYQLgZbyK/xD+NSfYPPJZQ+6T5LkpcNgW8BRk1ACI7S1W2/noxm7Qg=="],
+    "@effect/language-service": ["@effect/language-service@0.55.2", "", { "bin": { "effect-language-service": "cli.js" } }, "sha512-qagsdSuwwfyPw4Ns98c7YtkVS1gnYLtYIBVcwgAy29o2iVuC2h+u1GKVmD5zC9FvSWz3rAwbdVxij4cglrQBhw=="],
 
     "@effect/platform": ["@effect/platform@0.90.7", "", { "dependencies": { "find-my-way-ts": "^0.1.6", "msgpackr": "^1.11.4", "multipasta": "^0.2.7" }, "peerDependencies": { "effect": "^3.17.13" } }, "sha512-HpDnxR9KQ8gn2cJA3hsz42A3sCX/BP0NSv2F+dkW7n0ohoL9Rsfx5i1zJervuZdPz4/iOmpH9xlAOkYzXg6z0w=="],
 
@@ -501,7 +501,7 @@
 
     "eciesjs": ["eciesjs@0.4.15", "", { "dependencies": { "@ecies/ciphers": "^0.2.3", "@noble/ciphers": "^1.3.0", "@noble/curves": "^1.9.1", "@noble/hashes": "^1.8.0" } }, "sha512-r6kEJXDKecVOCj2nLMuXK/FCPeurW33+3JRpfXVbjLja3XUYFfD9I/JBreH6sUyzcm3G/YQboBjMla6poKeSdA=="],
 
-    "effect": ["effect@3.18.4", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-b1LXQJLe9D11wfnOKAk3PKxuqYshQ0Heez+y5pnkd3jLj1yx9QhM72zZ9uUrOQyNvrs2GZZd/3maL0ZV18YuDA=="],
+    "effect": ["effect@3.19.3", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-LodiPXiyUJWQ5LoMhUGbu0acD2ff5A5teJtUlLKDPVfoeWEBcZLlzK8BeVXpVa0f30UsdHouVCf0C/E0TxYMrA=="],
 
     "emoji-regex": ["emoji-regex@8.0.0", "", {}, "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="],
 

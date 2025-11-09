@@ -31,7 +31,7 @@ import {
   Subscribable,
 } from "effect";
 import * as Predicate from "effect/Predicate";
-import * as ZeroClient from "effect-zero/client";
+import * as ZeroClient from "effect-zero/client-old";
 import * as Mutators from "effect-zero/mutators";
 import * as ZeroServer from "effect-zero/server";
 import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "effect-zero/types";

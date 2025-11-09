@@ -53,9 +53,11 @@ export type AnyMutator<R = any, E = any> = Mutator<(...args: any[]) => Effect.Ef
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
 export type AnyMutators<R = any> = Record<string, AnyMutator<R> | Record<string, AnyMutator<R>>>;
 
-export type ExtractMutatorsRequirements<T extends AnyMutators> = T extends AnyMutators<infer R> ? R : never;
+export type ExtractMutatorsRequirements<TMutators extends AnyMutators> = TMutators extends AnyMutators<infer R>
+  ? R
+  : never;
 
-export const schema = <T extends AnyMutatorSchemas>(schema: T) => schema;
+export const schema = <TSchema extends AnyMutatorSchemas>(schema: TSchema) => schema;
 export function make<TSchema extends AnyMutatorSchemas, TFns extends MutatorFns<TSchema>>(
   schema: TSchema,
   mutators: TFns,

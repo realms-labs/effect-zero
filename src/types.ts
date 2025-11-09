@@ -6,78 +6,78 @@ import * as Schema from "effect/Schema";
 /** TODO: Defined as unknown for now */
 const JsonSchema = Schema.Unknown;
 
-const ZeroPrimaryKey = Schema.Array(Schema.String);
+const PrimaryKey = Schema.Array(Schema.String);
 
-const ZeroPrimaryKeyValue = Schema.Union(Schema.String, Schema.Number, Schema.Boolean);
+const PrimaryKeyValue = Schema.Union(Schema.String, Schema.Number, Schema.Boolean);
 
-const ZeroPrimaryKeyValueRecord = Schema.Record({ key: Schema.String, value: ZeroPrimaryKeyValue });
+const PrimaryKeyValueRecord = Schema.Record({ key: Schema.String, value: PrimaryKeyValue });
 
-const ZeroValue = Schema.Union(JsonSchema, Schema.Undefined);
-const ZeroRow = Schema.Record({ key: Schema.String, value: ZeroValue });
+const Value = Schema.Union(JsonSchema, Schema.Undefined);
+const Row = Schema.Record({ key: Schema.String, value: Value });
 
 const CRUD_MUTATION_NAME = "_zero_crud";
 
 /**
  * Inserts if entity with id does not already exist.
  */
-const ZeroInsertOp = Schema.Struct({
+const InsertOp = Schema.Struct({
   op: Schema.Literal("insert"),
   tableName: Schema.String,
-  primaryKey: ZeroPrimaryKey,
-  value: ZeroRow,
+  primaryKey: PrimaryKey,
+  value: Row,
 });
 
 /**
  * Upsert semantics. Inserts if entity with id does not already exist,
  * otherwise updates existing entity with id.
  */
-const ZeroUpsertOp = Schema.Struct({
+const UpsertOp = Schema.Struct({
   op: Schema.Literal("upsert"),
   tableName: Schema.String,
-  primaryKey: ZeroPrimaryKey,
-  value: ZeroRow,
+  primaryKey: PrimaryKey,
+  value: Row,
 });
 
 /**
  * Updates if entity with id exists, otherwise does nothing.
  */
-const ZeroUpdateOp = Schema.Struct({
+const UpdateOp = Schema.Struct({
   op: Schema.Literal("update"),
   tableName: Schema.String,
-  primaryKey: ZeroPrimaryKey,
+  primaryKey: PrimaryKey,
   // Partial value with at least the primary key fields
-  value: ZeroRow,
+  value: Row,
 });
 
 /**
  * Deletes entity with id if it exists, otherwise does nothing.
  */
-const ZeroDeleteOp = Schema.Struct({
+const DeleteOp = Schema.Struct({
   op: Schema.Literal("delete"),
   tableName: Schema.String,
-  primaryKey: ZeroPrimaryKey,
+  primaryKey: PrimaryKey,
   // Partial value representing the primary key
-  value: ZeroPrimaryKeyValueRecord,
+  value: PrimaryKeyValueRecord,
 });
 
-const ZeroCrudOp = Schema.Union(ZeroInsertOp, ZeroUpsertOp, ZeroUpdateOp, ZeroDeleteOp);
+const CrudOp = Schema.Union(InsertOp, UpsertOp, UpdateOp, DeleteOp);
 
-const ZeroCrudArg = Schema.Struct({
-  ops: Schema.Array(ZeroCrudOp),
+const CrudArg = Schema.Struct({
+  ops: Schema.Array(CrudOp),
 });
 
-const ZeroCrudArgs = Schema.Tuple(ZeroCrudArg);
+const CrudArgs = Schema.Tuple(CrudArg);
 
-const ZeroCrudMutation = Schema.Struct({
+const CrudMutation = Schema.Struct({
   type: Schema.Literal("crud"),
   id: Schema.Number,
   clientID: Schema.String,
   name: Schema.Literal(CRUD_MUTATION_NAME),
-  args: ZeroCrudArgs,
+  args: CrudArgs,
   timestamp: Schema.Number,
 });
 
-const ZeroCustomMutation = Schema.Struct({
+const CustomMutation = Schema.Struct({
   type: Schema.Literal("custom"),
   id: Schema.Number,
   clientID: Schema.String,
@@ -86,12 +86,12 @@ const ZeroCustomMutation = Schema.Struct({
   timestamp: Schema.Number,
 });
 
-export const ZeroMutation = Schema.Union(ZeroCrudMutation, ZeroCustomMutation);
-export type ZeroMutation = typeof ZeroMutation.Type;
+export const Mutation = Schema.Union(CrudMutation, CustomMutation);
+export type Mutation = typeof Mutation.Type;
 
-export const ZeroPushBody = Schema.Struct({
+export const PushBody = Schema.Struct({
   clientGroupID: Schema.String,
-  mutations: Schema.Array(ZeroMutation),
+  mutations: Schema.Array(Mutation),
   pushVersion: Schema.Number,
   // For legacy (CRUD) mutations, the schema is tied to the client group /
   // sync connection. For custom mutations, schema versioning is delegated
@@ -100,23 +100,23 @@ export const ZeroPushBody = Schema.Struct({
   timestamp: Schema.Number,
   requestID: Schema.String,
 });
-export type ZeroPushBody = typeof ZeroPushBody.Type;
+export type PushBody = typeof PushBody.Type;
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
-const ZeroPushMessage = Schema.Tuple(Schema.Literal("push"), ZeroPushBody);
+const PushMessage = Schema.Tuple(Schema.Literal("push"), PushBody);
 
-const ZeroMutationId = Schema.Struct({
+const MutationId = Schema.Struct({
   id: Schema.Number,
   clientID: Schema.String,
 });
 
-export const ZeroAppError = Schema.Struct({
+export const AppError = Schema.Struct({
   error: Schema.Literal("app"),
   // The user can return any additional data here
   details: Schema.optional(JsonSchema),
 });
 
-export type ZeroAppError = typeof ZeroAppError.Type;
+export type AppError = typeof AppError.Type;
 
 export const ZeroError = Schema.Struct({
   error: Schema.Union(Schema.Literal("oooMutation"), Schema.Literal("alreadyProcessed")),
@@ -125,77 +125,75 @@ export const ZeroError = Schema.Struct({
 
 export type ZeroError = typeof ZeroError.Type;
 
-const ZeroMutationOk = Schema.Struct({
+const MutationOk = Schema.Struct({
   // The user can return any additional data here
   data: Schema.optional(JsonSchema),
 });
 
-const ZeroMutationError = Schema.Union(ZeroAppError, ZeroError);
+const MutationError = Schema.Union(AppError, ZeroError);
 
-// We flip the original order here as otherwise values of type ZeroMutationError would get parsed as ZeroMutationOk with empty `data`
-export const ZeroMutationResult = Schema.Union(ZeroMutationError, ZeroMutationOk);
-export type ZeroMutationResult = typeof ZeroMutationResult.Type;
+export const MutationResult = Schema.Union(
+  // We flip the original order here as otherwise values of type MutationError would get parsed as MutationOk with empty `data`
+  MutationError,
+  MutationOk,
+);
+export type MutationResult = typeof MutationResult.Type;
 
-export const ZeroMutationResponse = Schema.Struct({
-  id: ZeroMutationId,
-  result: ZeroMutationResult,
+export const MutationResponse = Schema.Struct({
+  id: MutationId,
+  result: MutationResult,
 });
-export type ZeroMutationResponse = typeof ZeroMutationResponse.Type;
+export type MutationResponse = typeof MutationResponse.Type;
 
-const ZeroPushOk = Schema.Struct({
-  mutations: Schema.Array(ZeroMutationResponse),
+const PushOk = Schema.Struct({
+  mutations: Schema.Array(MutationResponse),
 });
 
-const ZeroUnsupportedPushVersion = Schema.Struct({
+const UnsupportedPushVersion = Schema.Struct({
   error: Schema.Literal("unsupportedPushVersion"),
   // optional for backwards compatibility
   // This field is included so the client knows which mutations
   // were not processed by the server.
-  mutationIDs: Schema.optional(Schema.Array(ZeroMutationId)),
+  mutationIDs: Schema.optional(Schema.Array(MutationId)),
 });
 
-const ZeroUnsupportedSchemaVersion = Schema.Struct({
+const UnsupportedSchemaVersion = Schema.Struct({
   error: Schema.Literal("unsupportedSchemaVersion"),
   // optional for backwards compatibility
   // This field is included so the client knows which mutations
   // were not processed by the server.
-  mutationIDs: Schema.optional(Schema.Array(ZeroMutationId)),
+  mutationIDs: Schema.optional(Schema.Array(MutationId)),
 });
 
-const ZeroHttpError = Schema.Struct({
+const HttpError = Schema.Struct({
   error: Schema.Literal("http"),
   status: Schema.Number,
   details: Schema.String,
-  mutationIDs: Schema.optional(Schema.Array(ZeroMutationId)),
+  mutationIDs: Schema.optional(Schema.Array(MutationId)),
 });
 
 const ZeroPusherError = Schema.Struct({
   error: Schema.Literal("zeroPusher"),
   details: Schema.String,
-  mutationIDs: Schema.optional(Schema.Array(ZeroMutationId)),
+  mutationIDs: Schema.optional(Schema.Array(MutationId)),
 });
 
-const ZeroPushError = Schema.Union(
-  ZeroUnsupportedPushVersion,
-  ZeroUnsupportedSchemaVersion,
-  ZeroHttpError,
-  ZeroPusherError,
-);
+const PushError = Schema.Union(UnsupportedPushVersion, UnsupportedSchemaVersion, HttpError, ZeroPusherError);
 
-export const ZeroPushResponse = Schema.Union(ZeroPushOk, ZeroPushError);
-export type ZeroPushResponse = typeof ZeroPushResponse.Type;
+export const PushResponse = Schema.Union(PushOk, PushError);
+export type PushResponse = typeof PushResponse.Type;
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
-const ZeroPushResponseMessage = Schema.Tuple(Schema.Literal("pushResponse"), ZeroPushResponse);
+const PushResponseMessage = Schema.Tuple(Schema.Literal("pushResponse"), PushResponse);
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
-const ZeroAckMutationResponsesMessage = Schema.Tuple(Schema.Literal("ackMutationResponses"), ZeroMutationId);
+const AckMutationResponsesMessage = Schema.Tuple(Schema.Literal("ackMutationResponses"), MutationId);
 
 /**
  * The schema for the querystring parameters of the custom push endpoint.
  */
-export const ZeroPushParams = Schema.Struct({
+export const PushParams = Schema.Struct({
   schema: Schema.String,
   appID: Schema.String,
 });
-export type ZeroPushParams = typeof ZeroPushParams.Type;
+export type PushParams = typeof PushParams.Type;

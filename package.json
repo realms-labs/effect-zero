@@ -18,12 +18,12 @@
     "@types/fs-extra": "^11.0.4",
     "fs-extra": "^11.3.2",
     "typescript": "5.9.2",
-    "@effect-atom/atom": "^0.3.3",
+    "@effect-atom/atom": "^0.4.0",
     "@rocicorp/zero": "^0.24.2025101500",
-    "effect": "^3.18.4",
+    "effect": "^3.19.3",
     "ts-patch": "^3.3.0",
     "@biomejs/biome": "^2.2.6",
-    "@effect/language-service": "^0.45.1"
+    "@effect/language-service": "^0.55.2"
   },
   "peerDependencies": {
     "@effect-atom/atom": "*",
