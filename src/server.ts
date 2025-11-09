@@ -22,13 +22,13 @@ import type * as ServerTransaction from "./server-transaction.js";
 import * as Types from "./types.js";
 import { prefixId } from "./utils.js";
 
-type ServerTransactionContext<TTransaction = unknown> = Omit<
+type ServerTransactionContext<TTransaction> = Omit<
   ReturnType<typeof ServerTransaction.make<string, TTransaction>>,
   "use"
 >;
 
-export const processPush = Effect.fn(function* <TMutators extends Mutators.AnyMutators>(
-  transaction: ServerTransactionContext,
+export const processPush = Effect.fn(function* <TTransaction, TMutators extends Mutators.AnyMutators>(
+  transaction: ServerTransactionContext<TTransaction>,
   mutators: TMutators,
   params: Types.PushParams,
   request: Types.PushBody,
@@ -65,7 +65,7 @@ export const processPush = Effect.fn(function* <TMutators extends Mutators.AnyMu
   );
 
   return { mutations: Chunk.toArray(responses) } satisfies Types.PushResponse;
-});
+}, Effect.provide(ServerSynchronizationContext.Default));
 
 const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Types.Mutation) {
   // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
@@ -107,7 +107,10 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
   );
 });
 
-const processMutationError = Effect.fn(function* (transaction: ServerTransactionContext, e: unknown) {
+const processMutationError = Effect.fn(function* <TTransaction>(
+  transaction: ServerTransactionContext<TTransaction>,
+  e: unknown,
+) {
   const { clientID, mutationID } = yield* ServerTransactionInput;
 
   yield* Effect.logError(`Unexpected error processing mutation ${mutationID} for client ${clientID}`, Cause.fail(e));

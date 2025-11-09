@@ -2,7 +2,6 @@ import type { TransactionProviderInput } from "@rocicorp/zero/server";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { prefixId } from "./utils.js";
@@ -12,19 +11,16 @@ export class ServerTransactionInput extends Context.Tag(prefixId("ServerTransact
   TransactionProviderInput
 >() {}
 
-export class ServerSynchronizationContext extends Context.Tag(prefixId("ServerSynchronizationContext"))<
-  ServerSynchronizationContext,
-  { wasTransactionExecuted: SynchronizedRef.SynchronizedRef<boolean> }
->() {
-  private static layer = Layer.effect(
-    this,
-    Effect.gen(function* () {
+export class ServerSynchronizationContext extends Effect.Service<ServerSynchronizationContext>()(
+  prefixId("ServerSynchronizationContext"),
+  {
+    effect: Effect.gen(function* () {
       return {
         wasTransactionExecuted: yield* SynchronizedRef.make(false),
       };
     }),
-  );
-
+  },
+) {
   // Ensures that only one transaction is executed at a time and checks that another transaction wasn't already executed.
   static guard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.flatMap(this, (ctx) =>
@@ -57,7 +53,7 @@ export class ServerSynchronizationContext extends Context.Tag(prefixId("ServerSy
         // Check that the transaction was executed during the mutation
         Effect.tap(!wasTransactionExecuted ? new NoTransactionError() : Effect.void),
       );
-    }).pipe(Effect.provide(this.layer));
+    });
 }
 
 export class NoTransactionError extends Data.TaggedError("NoTransactionError") {}
