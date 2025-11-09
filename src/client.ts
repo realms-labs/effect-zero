@@ -46,11 +46,16 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
     Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
   ) as UnwrapMutators<TSchema, TMutators>;
 
-  return new Zero({
-    ...options,
-    schema: transaction.schema,
-    mutators: unwrappedMutators,
-  });
+  return yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      return new Zero({
+        ...options,
+        schema: transaction.schema,
+        mutators: unwrappedMutators,
+      });
+    }),
+    (zero) => Effect.sync(() => zero.close()),
+  );
 });
 
 type UnwrapMutator<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutator> = Parameters<TMutators> extends []
