@@ -3,14 +3,16 @@
   "module": "index.ts",
   "dependencies": {
     "@effect-atom/atom": "^0.4.0",
-    "@effect/platform-bun": "^0.83.0",
-    "@rocicorp/zero": "^0.24.2025101500",
+    "@effect/platform-node": "^0.100.0",
+    "@effect/vitest": "^0.27.0",
+    "@rocicorp/zero": "^0.24.3000000000",
     "bun-storage": "^1.1.1",
     "drizzle-orm": "^0.44.5",
     "drizzle-zero": "^0.14.0",
     "effect": "^3.19.3",
     "effect-zero": "../package.tgz",
-    "nanoid": "^5.1.5"
+    "nanoid": "^5.1.5",
+    "undici": "^7.16.0"
   },
   "devDependencies": {
     "@types/bun": "^1.2.22",
@@ -20,7 +22,8 @@
   "private": true,
   "scripts": {
     "gen": "drizzle-zero generate --format -s drizzle.schema.ts -o schema.gen.ts",
-    "test:types": "tsc"
+    "test:types": "tsc",
+    "test": "vitest run"
   },
   "trustedDependencies": [
     "@parcel/watcher",

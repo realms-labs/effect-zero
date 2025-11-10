@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit --incremental",
     "lint": "biome check --error-on-warnings",
     "lint:fix": "biome check --write --unsafe",
-    "build": "bun scripts/build.ts"
+    "build": "bun scripts/build.ts",
+    "test": "(cd tests && bun run test)"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
