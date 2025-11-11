@@ -14,6 +14,7 @@ import { beforeEach } from "node:test";
 import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { NodeHttpServer } from "@effect/platform-node";
 import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
+import { type AnyQuery, createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -25,7 +26,8 @@ import * as Mutators from "effect-zero/mutators";
 import * as Query from "effect-zero/query";
 import * as Server from "effect-zero/server";
 import * as ServerTransaction from "effect-zero/server-transaction";
-import { PushBody, PushParams, PushResponse } from "effect-zero/types";
+import { PushBody, PushParams, PushResponse } from "effect-zero/types/push";
+import { TransformRequestMessage } from "effect-zero/types/queries";
 import { prefixId } from "effect-zero/utils";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
@@ -183,15 +185,38 @@ const serverMutators = Mutators.make(mutatorSchema, {
   }),
 });
 
+const builder = createBuilder(schema);
+
+const messageByIdQuery = Query.make({
+  name: "messageById",
+  payload: Schema.Tuple(Schema.String),
+  query: Effect.fn(function* (id) {
+    return yield* Effect.succeed(builder.messages.where("id", id).one());
+  }),
+});
+
+const messagesQuery = Query.make({
+  name: "messages",
+  payload: Schema.Tuple(),
+  query: Effect.fn(function* () {
+    // TODO: figure out why base queries (without `.limit()`) don't receive `completed` events
+    return yield* Effect.succeed(builder.messages.limit(100));
+  }),
+});
+
+const queries = Query.makeQueriesMap([messageByIdQuery, messagesQuery]);
+
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
 const waitForLastItem = Effect.fn("waitForLastItem")(<A, E, R>(stream: Stream.Stream<A, E, R>) => {
   return pipe(
     stream,
-    Stream.timeout(Duration.millis(100)),
+    Stream.timeout(Duration.millis(200)),
     Stream.runLast,
+    Effect.map(
+      Effect.catchTag("NoSuchElementException", () => Effect.fail(new Error("No items received from server"))),
+    ),
     Effect.flatten,
-    Effect.catchTag("NoSuchElementException", () => Effect.fail(new Error("No items received from server"))),
   );
 });
 
@@ -218,6 +243,23 @@ beforeAll(async () => {
         Effect.catchAll((e) =>
           Effect.gen(function* () {
             yield* Console.error("Push processor error:", e);
+            return HttpServerResponse.empty({ status: 500 });
+          }),
+        ),
+      ),
+    ),
+    HttpRouter.post(
+      "/get-queries",
+      Effect.gen(function* () {
+        const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
+        // TODO: figure out why it doesn't accept mutators that have `| undefined` as return type
+        // @ts-expect-error
+        const response = yield* Server.handleGetQueries(queries, schema, payload);
+        return yield* HttpServerResponse.json(response);
+      }).pipe(
+        Effect.catchAllCause(
+          Effect.fn(function* (c) {
+            yield* Effect.logError("get-queries error:", c);
             return HttpServerResponse.empty({ status: 500 });
           }),
         ),
@@ -614,4 +656,53 @@ it.scopedLive(
 
     yield* Effect.promise(() => expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined());
   }),
+);
+
+it.scopedLive(
+  "synced queries should work",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const value: Message = { id: nanoid(), body: "Hello, world!" };
+    yield* Effect.promise(() => ddb.insert(messages).values(value));
+
+    const q = yield* messageByIdQuery(value.id);
+    const sub = yield* Query.subscribe(z, q);
+    const q2 = yield* messagesQuery();
+    const sub2 = yield* Query.subscribe(z, q2);
+
+    {
+      const result = yield* pipe(
+        sub.changes,
+        Stream.filter((d) => d.status === "complete"),
+        waitForLastItem,
+      );
+
+      expect(result.data).toEqual(value);
+    }
+
+    {
+      const result = yield* pipe(
+        sub2.changes,
+        Stream.filter((d) => d.status === "complete"),
+        waitForLastItem,
+      );
+
+      expect(result.data).toEqual([value]);
+    }
+
+    {
+      const value2: Message = { id: nanoid(), body: "Hello, world!" };
+      yield* Effect.promise(() => ddb.insert(messages).values(value2));
+
+      const result = yield* pipe(
+        sub2.changes,
+        Stream.filter((d) => d.status === "complete"),
+        waitForLastItem,
+      );
+
+      expect(result.data).toEqual(expect.arrayContaining([value, value2]));
+    }
+  }),
+  10000,
 );
