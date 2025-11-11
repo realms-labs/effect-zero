@@ -14,7 +14,7 @@ import { beforeEach } from "node:test";
 import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { NodeHttpServer } from "@effect/platform-node";
 import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
-import { type AnyQuery, createBuilder } from "@rocicorp/zero";
+import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
