@@ -1,5 +1,5 @@
 import type {
-  AnyQuery,
+  AnyQuery as AnyZeroQuery,
   HumanReadable,
   ReadonlyJSONValue,
   Zero,
@@ -16,13 +16,13 @@ import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
-export type Query<Q extends AnyQuery> = Q & Equal.Equal;
+export type Query<Q extends AnyZeroQuery> = Q & Equal.Equal;
 
 export const make = <
   N extends string,
   A extends ReadonlyJSONValue[],
   B extends ReadonlyJSONValue[],
-  Q extends AnyQuery,
+  Q extends AnyZeroQuery,
   E,
   R1,
   R2,
@@ -57,7 +57,7 @@ export const make = <
 // biome-ignore lint/suspicious/noExplicitAny: accept any query
 export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   // biome-ignore lint/suspicious/noExplicitAny: accept any query
-  typeof make<string, any, any, AnyQuery, E, R1, R2>
+  typeof make<string, any, any, AnyZeroQuery, E, R1, R2>
 >;
 
 export function makeQueriesMap<T extends { queryName: string }[]>(list: T) {
