@@ -1,11 +1,4 @@
-import type {
-  AnyQuery as AnyZeroQuery,
-  HumanReadable,
-  ReadonlyJSONValue,
-  Zero,
-  Query as ZeroQuery,
-  Schema as ZeroSchema,
-} from "@rocicorp/zero";
+import type { HumanReadable, ReadonlyJSONValue, Zero, Query as ZeroQuery, Schema as ZeroSchema } from "@rocicorp/zero";
 import type { QueryResult as ZeroQueryResult } from "@rocicorp/zero/react";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -16,27 +9,29 @@ import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
-export type Query<Q extends AnyZeroQuery> = Q & Equal.Equal;
+export type Query<S extends ZeroSchema, T extends keyof S["tables"] & string, R> = ZeroQuery<S, T, R> & Equal.Equal;
 
 export const make = <
   N extends string,
   A extends ReadonlyJSONValue[],
   B extends ReadonlyJSONValue[],
-  Q extends AnyZeroQuery,
+  S extends ZeroSchema,
+  T extends keyof S["tables"] & string,
+  R,
   E,
   R1,
   R2,
 >(options: {
   name: N;
   payload: Schema.Schema<readonly [...B], readonly [...A], R1>;
-  query: (...args: NoInfer<B>) => Effect.Effect<Q, E, R2>;
+  query: (...args: NoInfer<B>) => Effect.Effect<ZeroQuery<S, T, R>, E, R2>;
 }) => {
   return Object.assign(
     Effect.fn(function* (...args: A) {
       const parsed = yield* Schema.decode(options.payload)(args);
       return yield* options.query(...parsed).pipe(
         Effect.map((rawQuery) => {
-          const query = rawQuery.nameAndArgs(options.name, parsed) as Query<Q>;
+          const query = rawQuery.nameAndArgs(options.name, parsed) as Query<S, T, R>;
           query[Hash.symbol] = function () {
             return Hash.hash(this.hash());
           };
@@ -57,7 +52,7 @@ export const make = <
 // biome-ignore lint/suspicious/noExplicitAny: accept any query
 export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   // biome-ignore lint/suspicious/noExplicitAny: accept any query
-  typeof make<string, any, any, AnyZeroQuery, E, R1, R2>
+  typeof make<string, any, any, ZeroSchema, string, any, E, R1, R2>
 >;
 
 export function makeQueriesMap<T extends { queryName: string }[]>(list: T) {
@@ -68,7 +63,7 @@ export function makeQueriesMap<T extends { queryName: string }[]>(list: T) {
 
 export const subscribe = Effect.fn(function* <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
   zero: Zero<S>,
-  query: ZeroQuery<S, T, R>,
+  query: ZeroQuery<S, T, R> | Query<S, T, R>,
 ) {
   const view = yield* Effect.acquireRelease(
     Effect.sync(() => zero.materialize(query)),
