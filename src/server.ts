@@ -175,16 +175,18 @@ class MutationUserError extends Data.TaggedError("MutationUserError")<{
 }
 
 export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
-  queries: Record<string, MakeQueryResult<E, R1, R2>>,
+  queries: MakeQueryResult<E, R1, R2>[],
   schema: ZeroSchema,
   payload: TransformRequestMessage,
 ) {
+  const queriesMap = Object.fromEntries(queries.map((q) => [q.queryName, q]));
+
   const runtime = yield* Effect.runtime<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
       handleGetQueriesRequest(
         (name, args) =>
-          Rec.get(queries, name).pipe(
+          Rec.get(queriesMap, name).pipe(
             Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ queryName: name })),
             Effect.flatMap((query) => query(...args)),
             Effect.map((query) => ({ query })),

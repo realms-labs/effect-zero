@@ -204,7 +204,7 @@ const messagesQuery = Query.make({
   }),
 });
 
-const queries = Query.makeQueriesMap([messageByIdQuery, messagesQuery]);
+const queries = [messageByIdQuery, messagesQuery];
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 

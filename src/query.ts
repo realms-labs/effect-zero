@@ -55,12 +55,6 @@ export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   typeof make<string, any, any, ZeroSchema, string, any, E, R1, R2>
 >;
 
-export function makeQueriesMap<T extends { queryName: string }[]>(list: T) {
-  return Object.fromEntries(list.map((q) => [q.queryName, q])) as {
-    [K in keyof T as T[K] extends { queryName: infer Q extends string } ? Q : never]: T[K];
-  };
-}
-
 export const subscribe = Effect.fn(function* <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
   zero: Zero<S>,
   query: ZeroQuery<S, T, R> | Query<S, T, R>,
