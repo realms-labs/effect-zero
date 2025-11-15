@@ -403,14 +403,16 @@ it.scopedLive(
   }),
 );
 
-it.scopedLive.skip(
+it.scopedLive(
   "schema validation is applied to mutator arguments",
   Effect.fn(function* () {
     const z = yield* initZero;
 
     yield* Effect.tryPromise({
       try: async () => {
-        await z.mutate.messages.create({} as any).client;
+        const mut = z.mutate.messages.create({} as any)
+        await mut.client.catch(Effect.fail)
+        await mut.server.catch(Effect.fail)
         // expect.fail("should be unreachable");
       },
       catch: (e) => expect(e).toSatisfy(Predicate.isTagged("ClientArgsParseError")),
@@ -472,12 +474,17 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.promise(() =>
-      expect(z.mutate.throwsErrorInsideTransaction().server).rejects.toEqual({
+    yield* Effect.tryPromise({
+      try: async () => {
+        const mut = z.mutate.throwsErrorInsideTransaction()
+        await mut.client.catch(Effect.fail)
+        await mut.server.catch(Effect.fail)
+      },
+      catch: (e) => expect(e).toEqual({
         error: "app",
         details: "error in throwsErrorInsideTransaction",
       }),
-    );
+    });
   }),
 );
 
@@ -544,12 +551,17 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.promise(() =>
-      expect(z.mutate.noTransaction().server).rejects.toEqual({
+    yield* Effect.tryPromise({
+      try: async () => {
+        const mut = z.mutate.noTransaction()
+        await mut.client.catch(Effect.fail)
+        await mut.server.catch(Effect.fail)
+      },
+      catch: (e) => expect(e).toEqual({
         error: "app",
         details: "No transaction detected in a mutation, a transaction is required.",
       }),
-    );
+    });
   }),
 );
 
