@@ -477,8 +477,8 @@ it.scopedLive(
     yield* Effect.tryPromise({
       try: async () => {
         const mut = z.mutate.throwsErrorInsideTransaction()
-        await mut.client.catch(Effect.fail)
         await mut.server.catch(Effect.fail)
+        await mut.client.catch(Effect.fail)
       },
       catch: (e) => expect(e).toEqual({
         error: "app",
@@ -554,8 +554,8 @@ it.scopedLive(
     yield* Effect.tryPromise({
       try: async () => {
         const mut = z.mutate.noTransaction()
-        await mut.client.catch(Effect.fail)
         await mut.server.catch(Effect.fail)
+        await mut.client.catch(Effect.fail)
       },
       catch: (e) => expect(e).toEqual({
         error: "app",
