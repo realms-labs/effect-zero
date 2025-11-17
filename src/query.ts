@@ -52,7 +52,7 @@ export const make = <
 // biome-ignore lint/suspicious/noExplicitAny: accept any query
 export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   // biome-ignore lint/suspicious/noExplicitAny: accept any query
-  typeof make<string, any, any, ZeroSchema, string, any, E, R1, R2>
+  typeof make<string, any, any, ZeroSchema, string, Record<string, any> | undefined, E, R1, R2>
 >;
 
 export const subscribe = Effect.fn(function* <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(

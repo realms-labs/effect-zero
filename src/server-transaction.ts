@@ -1,4 +1,9 @@
-import type { TransactionProviderHooks, Database as ZeroDatabase } from "@rocicorp/zero/server";
+import type {
+  Schema as ZeroSchema,
+  ServerTransaction as ZeroServerTransaction,
+  Transaction as ZeroTransaction,
+} from "@rocicorp/zero";
+import type { TransactionProviderHooks, ZQLDatabase } from "@rocicorp/zero/server";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -23,17 +28,22 @@ export interface ServerTransactionContext {
   readonly _tag: unique symbol;
 }
 
-export const make = <const Id extends string, TTransaction>(
+export const make = <const Id extends string, TSchema extends ZeroSchema, TTransaction>(
   id: Id,
-  database: ZeroDatabase<TTransaction>,
-  clientTransaction: Context.TagClass<ClientTransaction.ClientTransaction, string, TTransaction>,
+  database: ZQLDatabase<TSchema, TTransaction>,
+  clientTransaction: Context.TagClass<ClientTransaction.ClientTransaction, string, ZeroTransaction<TSchema>>,
 ) => {
   const ServerTransactionContext = Context.Tag(`${id}/ServerTransactionContext` as const)<
     ServerTransactionContext,
-    { transaction: TTransaction; transactionHooks: TransactionProviderHooks }
+    { transaction: ZeroServerTransaction<TSchema, TTransaction>; transactionHooks: TransactionProviderHooks }
   >();
 
-  const use = <A>(fn: (transaction: TTransaction, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
+  const use = <A>(
+    fn: (
+      transaction: ZeroServerTransaction<TSchema, TTransaction>,
+      options: { readonly signal: AbortSignal },
+    ) => PromiseLike<A>,
+  ) =>
     Effect.flatMap(ServerTransactionContext, (ctx) =>
       Effect.tryPromise({
         try: (signal) => fn(ctx.transaction, { signal }),

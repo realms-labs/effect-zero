@@ -28,13 +28,17 @@ import * as Types from "./types/push.js";
 import type { TransformRequestMessage } from "./types/queries.js";
 import { prefixId } from "./utils.js";
 
-type ServerTransactionContext<TTransaction> = Omit<
-  ReturnType<typeof ServerTransaction.make<string, TTransaction>>,
+type ServerTransactionContext<TSchema extends ZeroSchema, TTransaction> = Omit<
+  ReturnType<typeof ServerTransaction.make<string, TSchema, TTransaction>>,
   "use"
 >;
 
-export const processPush = Effect.fn(function* <TTransaction, TMutators extends Mutators.AnyMutators>(
-  transaction: ServerTransactionContext<TTransaction>,
+export const processPush = Effect.fn(function* <
+  TSchema extends ZeroSchema,
+  TTransaction,
+  TMutators extends Mutators.AnyMutators,
+>(
+  transaction: ServerTransactionContext<TSchema, TTransaction>,
   mutators: TMutators,
   params: Types.PushParams,
   request: Types.PushBody,
@@ -113,8 +117,8 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
   );
 });
 
-const processMutationError = Effect.fn(function* <TTransaction>(
-  transaction: ServerTransactionContext<TTransaction>,
+const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TTransaction>(
+  transaction: ServerTransactionContext<TSchema, TTransaction>,
   e: unknown,
 ) {
   const { clientID, mutationID } = yield* ServerTransactionInput;

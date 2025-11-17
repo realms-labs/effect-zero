@@ -111,9 +111,7 @@ const clientMutators = Mutators.make(mutatorSchema, {
 
 const serverMutators = Mutators.make(mutatorSchema, {
   messages: {
-    create: Effect.fn(function* (msg) {
-      yield* clientMutators.messages.create(msg).pipe(serverTransaction.execute);
-    }),
+    create: (msg) => clientMutators.messages.create(msg).pipe(serverTransaction.execute),
   },
   optionalVoidArg: Effect.fn(function* () {}),
   transformArgs: Effect.fn(function* (a) {
@@ -133,7 +131,7 @@ const serverMutators = Mutators.make(mutatorSchema, {
   throwsErrorAfterTransaction: Effect.fn(function* () {
     yield* serverTransaction
       .use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+        await tx.dbTransaction.wrappedTransaction.insert(messages).values({ id: nanoid(), body: "hello world" });
       })
       .pipe(serverTransaction.execute);
     throw new Error("error in throwsErrorAfterTransaction");
@@ -204,7 +202,7 @@ const messagesQuery = Query.make({
   }),
 });
 
-const queries = [messageByIdQuery, messagesQuery];
+const queries = [messageByIdQuery, messagesQuery] satisfies Query.MakeQueryResult[];
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
@@ -252,8 +250,6 @@ beforeAll(async () => {
       "/get-queries",
       Effect.gen(function* () {
         const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-        // TODO: figure out why it doesn't accept mutators that have `| undefined` as return type
-        // @ts-expect-error
         const response = yield* Server.handleGetQueries(queries, schema, payload);
         return yield* HttpServerResponse.json(response);
       }).pipe(
