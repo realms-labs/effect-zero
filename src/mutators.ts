@@ -59,22 +59,22 @@ export type ExtractMutatorsRequirements<TMutators extends AnyMutators> = TMutato
 
 export const schema = <TSchema extends AnyMutatorSchemas>(schema: TSchema) => schema;
 
-export function make<TSchema extends AnyMutatorSchemas>(
+export function make<TSchema extends AnyMutatorSchemas, TFns extends MutatorFns<TSchema>>(
   schema: TSchema,
-): <TFns extends MutatorFns<typeof schema>>(mutators: TFns) => Mutators<TSchema, TFns>;
-export function make(schema: AnyMutatorSchemas): (mutators: AnyMutatorFns) => AnyMutators {
+  mutators: TFns,
+): Mutators<TSchema, TFns>;
+export function make(schema: AnyMutatorSchemas, mutators: AnyMutatorFns): AnyMutators {
   function makeMutator(schema: AnyMutatorSchema, fn: AnyMutatorFn) {
     return Object.assign(fn, { [MutatorSchemaSymbol]: schema });
   }
-  return (mutators: AnyMutatorFns): AnyMutators => {
-    return Rec.map(mutators, (v, name) => {
-      return Match.value([v, schema[name]]).pipe(
-        Match.when([Predicate.isFunction, Schema.isSchema], ([mutator, schema]) => makeMutator(schema, mutator)),
-        Match.when([Predicate.isRecord, Predicate.isRecord], ([mutator, schema]) =>
-          Rec.map(mutator, (mutator, name) => makeMutator(Option.getOrThrow(Rec.get(schema, name)), mutator)),
-        ),
-        Match.orElseAbsurd,
-      );
-    });
-  };
+
+  return Rec.map(mutators, (v, name) => {
+    return Match.value([v, schema[name]]).pipe(
+      Match.when([Predicate.isFunction, Schema.isSchema], ([mutator, schema]) => makeMutator(schema, mutator)),
+      Match.when([Predicate.isRecord, Predicate.isRecord], ([mutator, schema]) =>
+        Rec.map(mutator, (mutator, name) => makeMutator(Option.getOrThrow(Rec.get(schema, name)), mutator)),
+      ),
+      Match.orElseAbsurd,
+    );
+  });
 }

@@ -80,7 +80,7 @@ const transformArgsServer = vi.fn(
   }),
 );
 
-const clientMutators = Mutators.make(mutatorSchema)({
+const clientMutators = Mutators.make(mutatorSchema, {
   messages: {
     create: Effect.fn(function* (msg) {
       yield* clientTransaction.use(async (tx) => {
@@ -89,26 +89,28 @@ const clientMutators = Mutators.make(mutatorSchema)({
     }),
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
-  optionalVoidArg: Effect.fn(function* (a) {}),
-  transformArgs: Effect.fn(function* (a) {
-    return yield* transformArgsClient(a);
-  }),
-  throwsError: Effect.fn(function* () {}),
-  throwsErrorInsideTransaction: Effect.fn(function* () {}),
-  throwsErrorAfterTransaction: Effect.fn(function* () {}),
-  clientThrowsError: Effect.fn(function* () {
-    yield* Effect.void;
-    throw new Error("client error");
-  }),
-  yieldsError: Effect.fn(function* () {}),
-  yieldsErrorInsideTransaction: Effect.fn(function* () {}),
-  yieldsErrorAfterTransaction: Effect.fn(function* () {}),
-  noTransaction: Effect.fn(function* () {}),
-  doubleTransaction: Effect.fn(function* () {}),
-  concurrentTransactions: Effect.fn(function* () {}),
+  optionalVoidArg: (v) => Effect.gen(function* (a) {}),
+  transformArgs: () =>
+    Effect.gen(function* (a) {
+      return yield* transformArgsClient(a);
+    }),
+  throwsError: () => Effect.gen(function* () {}),
+  throwsErrorInsideTransaction: () => Effect.gen(function* () {}),
+  throwsErrorAfterTransaction: () => Effect.gen(function* () {}),
+  clientThrowsError: () =>
+    Effect.gen(function* () {
+      yield* Effect.void;
+      throw new Error("client error");
+    }),
+  yieldsError: () => Effect.gen(function* () {}),
+  yieldsErrorInsideTransaction: () => Effect.gen(function* () {}),
+  yieldsErrorAfterTransaction: () => Effect.gen(function* () {}),
+  noTransaction: () => Effect.gen(function* () {}),
+  doubleTransaction: () => Effect.gen(function* () {}),
+  concurrentTransactions: () => Effect.gen(function* () {}),
 });
 
-const serverMutators = Mutators.make(mutatorSchema)({
+const serverMutators = Mutators.make(mutatorSchema, {
   messages: {
     create: Effect.fn(function* (msg) {
       yield* clientMutators.messages.create(msg).pipe(serverTransaction.execute);
@@ -332,7 +334,7 @@ test("mutator requirements should propagate", () => {
     dummy: Schema.Void,
     dummy2: Schema.Void,
   });
-  const mutators = Mutators.make(mutatorSchema)({
+  const mutators = Mutators.make(mutatorSchema, {
     dummy: Effect.fn(function* () {
       yield* DummyTag;
     }),
@@ -606,7 +608,7 @@ it.scopedLive(
     const mutatorSchema = Mutators.schema({
       nonExistingMutator: Schema.Void,
     });
-    const clientMutators = Mutators.make(mutatorSchema)({
+    const clientMutators = Mutators.make(mutatorSchema, {
       nonExistingMutator: Effect.fn(function* () {}),
     });
     const z = yield* Client.make(clientTransaction, clientMutators, {
