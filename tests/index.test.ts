@@ -82,11 +82,10 @@ const transformArgsServer = vi.fn(
 
 const clientMutators = Mutators.make(mutatorSchema, {
   messages: {
-    create: Effect.fn(function* (msg) {
-      yield* clientTransaction.use(async (tx) => {
+    create: (msg) =>
+      clientTransaction.use(async (tx) => {
         await tx.mutate.messages.insert(msg);
-      });
-    }),
+      }),
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
   optionalVoidArg: (v) => Effect.gen(function* (a) {}),
