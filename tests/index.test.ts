@@ -90,9 +90,9 @@ const clientMutators = Mutators.make(mutatorSchema, {
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
   optionalVoidArg: (v) => Effect.gen(function* (a) {}),
-  transformArgs: () =>
+  transformArgs: (v) =>
     Effect.gen(function* (a) {
-      return yield* transformArgsClient(a);
+      return yield* transformArgsClient(v);
     }),
   throwsError: () => Effect.gen(function* () {}),
   throwsErrorInsideTransaction: () => Effect.gen(function* () {}),
