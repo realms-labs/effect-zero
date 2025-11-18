@@ -1,5 +1,6 @@
 import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
 import { handleGetQueriesRequest } from "@rocicorp/zero/server";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Chunk from "effect/Chunk";
 import * as Data from "effect/Data";
@@ -23,7 +24,7 @@ import {
 } from "./internal/server.js";
 import { prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
-import type { MakeQueryResult } from "./query.js";
+import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
 import * as Types from "./types/push.js";
 import type { TransformRequestMessage } from "./types/queries.js";
@@ -183,16 +184,14 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   schema: ZeroSchema,
   payload: TransformRequestMessage,
 ) {
-  const queriesMap = Object.fromEntries(queries.map((q) => [q.queryName, q]));
-
   const runtime = yield* Effect.runtime<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
       handleGetQueriesRequest(
         (name, args) =>
-          Rec.get(queriesMap, name).pipe(
-            Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ queryName: name })),
-            Effect.flatMap((query) => query(...args)),
+          Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
+            Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ name })),
+            Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
             Effect.map((query) => ({ query })),
             (effect) => Runtime.runPromiseExit(runtime, effect),
             (exit) =>
@@ -213,9 +212,9 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   });
 });
 
-class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ queryName: string }> {
+class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> {
   override get message() {
-    return `Query not found: ${this.queryName}`;
+    return `Query not found: ${this.name}`;
   }
 }
 

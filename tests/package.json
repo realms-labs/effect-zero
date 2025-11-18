@@ -17,11 +17,11 @@
   "devDependencies": {
     "@types/bun": "^1.2.22",
     "drizzle-kit": "^0.31.4",
-    "fast-glob": "^3.3.3",
     "vitest": "^3.2.4"
   },
   "private": true,
   "scripts": {
+    "rebuild": "(cd .. && bun run build) && bun rm effect-zero && bun add effect-zero@../package.tgz",
     "gen": "drizzle-zero generate --format -s drizzle.schema.ts -o schema.gen.ts",
     "test:types": "tsc",
     "test": "vitest run"

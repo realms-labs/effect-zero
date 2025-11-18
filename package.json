@@ -15,15 +15,16 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
+    "@biomejs/biome": "^2.2.6",
+    "@effect/language-service": "^0.55.2",
+    "@rocicorp/zero": "^0.24.3000000000",
     "@types/bun": "latest",
     "@types/fs-extra": "^11.0.4",
-    "fs-extra": "^11.3.2",
-    "typescript": "5.9.2",
-    "@rocicorp/zero": "^0.24.3000000000",
     "effect": "^3.19.3",
+    "fast-glob": "^3.3.3",
+    "fs-extra": "^11.3.2",
     "ts-patch": "^3.3.0",
-    "@biomejs/biome": "^2.2.6",
-    "@effect/language-service": "^0.55.2"
+    "typescript": "5.9.2"
   },
   "peerDependencies": {
     "@rocicorp/zero": "*",

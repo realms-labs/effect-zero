@@ -201,7 +201,19 @@ const messagesQuery = Query.make({
   }),
 });
 
-const queries = [messageByIdQuery, messagesQuery] satisfies Query.MakeQueryResult[];
+const transformArgsQuerySpy = vi.fn();
+
+const transformArgsQuery = Query.make({
+  name: "transformArgs",
+  payload: Schema.Tuple(Schema.DateFromNumber),
+  query: Effect.fn(function* (a) {
+    expectTypeOf<typeof a>().toEqualTypeOf<Date>();
+    transformArgsQuerySpy(a);
+    return yield* Effect.succeed(builder.messages);
+  }),
+});
+
+const queries = [messageByIdQuery, messagesQuery, transformArgsQuery] satisfies Query.MakeQueryResult[];
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
@@ -681,4 +693,18 @@ it.scopedLive(
     }
   }),
   10000,
+);
+
+it.scopedLive(
+  "transformArgsQuery should accept and passthrough encoded non-JSON args",
+  Effect.fn(function* () {
+    expectTypeOf<Parameters<typeof transformArgsQuery>>().toEqualTypeOf<[Date]>();
+
+    const now = new Date();
+    const query = yield* transformArgsQuery(now);
+    const zero = yield* initZero;
+    yield* Effect.promise(() => zero.run(query));
+
+    expect(transformArgsQuerySpy).toHaveBeenCalledWith(now);
+  }),
 );

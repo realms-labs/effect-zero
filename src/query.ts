@@ -3,18 +3,33 @@ import type { QueryResult as ZeroQueryResult } from "@rocicorp/zero/react";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
+import * as Match from "effect/Match";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { prefixId } from "./internal/utils.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
 export type Query<S extends ZeroSchema, T extends keyof S["tables"] & string, R> = ZeroQuery<S, T, R> & Equal.Equal;
 
+type QueryArgs<
+  A extends ReadonlyJSONValue[],
+  B extends unknown[],
+> = // biome-ignore lint/suspicious/noExplicitAny: handles "any query" case
+| { _tag: "Encoded"; args: any extends A ? any : readonly [...A] }
+// biome-ignore lint/suspicious/noExplicitAny: handles "any query" case
+| { _tag: "Decoded"; args: any extends B ? any : readonly [...B] };
+
+export const RunQuerySymbol = Symbol.for(prefixId("RunQuery"));
+export const QueryNameSymbol = Symbol.for(prefixId("QueryName"));
+
 export const make = <
   N extends string,
+  // The encoded format that is sent over the wire, must conform to JSON
   A extends ReadonlyJSONValue[],
-  B extends ReadonlyJSONValue[],
+  // The decoded format, can be anything
+  B extends unknown[],
   S extends ZeroSchema,
   T extends keyof S["tables"] & string,
   R,
@@ -26,27 +41,40 @@ export const make = <
   payload: Schema.Schema<readonly [...B], readonly [...A], R1>;
   query: (...args: NoInfer<B>) => Effect.Effect<ZeroQuery<S, T, R>, E, R2>;
 }) => {
-  return Object.assign(
-    Effect.fn(function* (...args: A) {
-      const parsed = yield* Schema.decode(options.payload)(args);
-      return yield* options.query(...parsed).pipe(
-        Effect.map((rawQuery) => {
-          const query = rawQuery.nameAndArgs(options.name, parsed) as Query<S, T, R>;
-          query[Hash.symbol] = function () {
-            return Hash.hash(this.hash());
-          };
-          query[Equal.symbol] = function (that) {
-            if (Hash.isHash(that)) {
-              return Equal.equals(this[Hash.symbol](), that[Hash.symbol]());
-            }
-            return false;
-          };
-          return query;
-        }),
-      );
-    }),
-    { queryName: options.name },
-  );
+  const runQuery = Effect.fn(function* (args: QueryArgs<A, B>) {
+    const { encoded, decoded } = yield* Match.valueTags(args, {
+      Encoded: ({ args: encoded }) =>
+        Effect.map(Schema.decode(options.payload)(encoded), (decoded) => ({ encoded, decoded })),
+      Decoded: ({ args: decoded }) =>
+        Effect.map(Schema.encode(options.payload)(decoded), (encoded) => ({ encoded, decoded })),
+    });
+
+    return yield* options.query(...decoded).pipe(
+      Effect.map((rawQuery) => {
+        const query = rawQuery.nameAndArgs(
+          options.name,
+          // We pass the encoded `args` to the `nameAndArgs` method, as that is the wire format which
+          // is sent to the server.
+          encoded,
+        ) as Query<S, T, R>;
+        query[Hash.symbol] = function () {
+          return Hash.hash(this.hash());
+        };
+        query[Equal.symbol] = function (that) {
+          if (Hash.isHash(that)) {
+            return Equal.equals(this[Hash.symbol](), that[Hash.symbol]());
+          }
+          return false;
+        };
+        return query;
+      }),
+    );
+  });
+
+  return Object.assign((...args: B) => runQuery({ _tag: "Decoded", args }), {
+    [QueryNameSymbol]: options.name,
+    [RunQuerySymbol]: runQuery,
+  });
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: accept any query
