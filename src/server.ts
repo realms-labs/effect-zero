@@ -15,18 +15,18 @@ import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
-import * as Mutators from "./mutators.js";
-import type { MakeQueryResult } from "./query.js";
 import {
   MutationAlreadyProcessedError,
   OutOfOrderMutationError,
   ServerSynchronizationContext,
   ServerTransactionInput,
-} from "./server-internal.js";
+} from "./internal/server.js";
+import { prefixId } from "./internal/utils.js";
+import * as Mutators from "./mutators.js";
+import type { MakeQueryResult } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
 import * as Types from "./types/push.js";
 import type { TransformRequestMessage } from "./types/queries.js";
-import { prefixId } from "./utils.js";
 
 type ServerTransactionContext<TSchema extends ZeroSchema, TTransaction> = Omit<
   ReturnType<typeof ServerTransaction.make<string, TSchema, TTransaction>>,
