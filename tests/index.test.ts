@@ -82,11 +82,10 @@ const transformArgsServer = vi.fn(
 
 const clientMutators = Mutators.make(mutatorSchema, {
   messages: {
-    create: Effect.fn(function* (msg) {
-      yield* clientTransaction.use(async (tx) => {
+    create: (msg) =>
+      clientTransaction.use(async (tx) => {
         await tx.mutate.messages.insert(msg);
-      });
-    }),
+      }),
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
   optionalVoidArg: Effect.fn(function* (a) {}),
@@ -403,34 +402,21 @@ it.scopedLive(
   }),
 );
 
-it.scopedLive.skip(
+it.scopedLive(
   "schema validation is applied to mutator arguments",
   Effect.fn(function* () {
     const z = yield* initZero;
 
     yield* Effect.tryPromise({
       try: async () => {
-        await z.mutate.messages.create({} as any).client;
-        // expect.fail("should be unreachable");
+        const mut = z.mutate.messages.create({} as any);
+        await mut.client.catch(Effect.fail);
+        await mut.server.catch(Effect.fail);
       },
-      catch: (e) => expect(e).toSatisfy(Predicate.isTagged("ClientArgsParseError")),
+      catch: (e) => {
+        expect(e).toSatisfy(Predicate.isTagged("ClientArgsParseError"));
+      },
     });
-
-    // expect(() => z.mutate.messages.create({} as any)).toThrowError(ClientArgsParseError);
-    // yield* Effect.promise(() =>
-    //   mut.client
-    //     .catch((e) => {
-    //       expect(e).toSatisfy(Predicate.isTagged("ClientArgsParseError"));
-    //     })
-    //     .then(() => expect.fail("should be unreachable")),
-    // );
-    // yield* Effect.promise(() =>
-    //   mut.server
-    //     .catch((e) => {
-    //       expect(e).toSatisfy(Predicate.isTagged("ClientArgsParseError"));
-    //     })
-    //     .then(() => expect.fail("should be unreachable")),
-    // );
   }),
 );
 
@@ -472,12 +458,17 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.promise(() =>
-      expect(z.mutate.throwsErrorInsideTransaction().server).rejects.toEqual({
-        error: "app",
-        details: "error in throwsErrorInsideTransaction",
-      }),
-    );
+    yield* Effect.tryPromise({
+      try: async () => {
+        const mut = z.mutate.throwsErrorInsideTransaction();
+        await mut.server.catch(Effect.fail);
+      },
+      catch: (e) =>
+        expect(e).toEqual({
+          error: "app",
+          details: "error in throwsErrorInsideTransaction",
+        }),
+    });
   }),
 );
 
@@ -544,12 +535,17 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.promise(() =>
-      expect(z.mutate.noTransaction().server).rejects.toEqual({
-        error: "app",
-        details: "No transaction detected in a mutation, a transaction is required.",
-      }),
-    );
+    yield* Effect.tryPromise({
+      try: async () => {
+        const mut = z.mutate.noTransaction();
+        await mut.server.catch(Effect.fail);
+      },
+      catch: (e) =>
+        expect(e).toEqual({
+          error: "app",
+          details: "No transaction detected in a mutation, a transaction is required.",
+        }),
+    });
   }),
 );
 
