@@ -40,7 +40,7 @@ jobs:
           bun test:types
           bun zero-cache-dev > /dev/null 2>&1 &
           sleep 10
-          bun test
+          bun run test
       - name: Publish
         shell: bash
         env:

@@ -1,8 +1,5 @@
-import { Atom } from "@effect-atom/atom";
-import type { HumanReadable, Query, ReadonlyJSONValue, Transaction, Schema as ZeroSchema } from "@rocicorp/zero";
-import type { QueryResult } from "@rocicorp/zero/react";
+import { Zero, type ZeroOptions, type Schema as ZeroSchema, type Transaction as ZeroTransaction } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -12,119 +9,72 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as Subscribable from "effect/Subscribable";
-import * as SubscriptionRef from "effect/SubscriptionRef";
-import {
-  type AnyMutator,
-  type AnyMutators,
-  type ExtractMutatorsRequirements,
-  MutatorArgsSchemaSym,
-} from "./mutators.js";
-import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
-import { prefixId } from "./utils.js";
+import type * as ClientTransaction from "./client-transaction.js";
+import * as Mutators from "./mutators.js";
 
-// Updated to: https://github.com/rocicorp/mono/blob/2e18f2e1d084c530ebd9bd7fef9bb848e607cc19/packages/zero-pg/src/push-processor.ts
+type ClientTransactionContext<TSchema extends ZeroSchema> = Omit<
+  ReturnType<typeof ClientTransaction.make<string, TSchema>>,
+  "use"
+>;
 
-// Necessary workaround for TS declaration generation
-export interface ZeroClientTransaction {
-  readonly _tag: unique symbol;
-}
+export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
+  transaction: ClientTransactionContext<TSchema>,
+  mutators: TMutators,
+  options: Omit<ZeroOptions<TSchema>, "schema" | "mutators">,
+) {
+  const runtime =
+    yield* Effect.runtime<
+      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, ClientTransaction.ClientTransaction>
+    >();
 
-export const makeClient = <S extends ZeroSchema>() => {
-  // TODO: Maybe prefix this / suffix this with a tag passed in to `make`?
-  const ZeroClientTransaction = Context.Tag(prefixId("ZeroClientTransaction"))<ZeroClientTransaction, Transaction<S>>();
+  function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
+    return async (tx: ZeroTransaction<TSchema>, args: unknown) => {
+      const exit = await Schema.decode(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
+        Effect.catchTag("ParseError", (e) => new ClientArgsParseError({ cause: Cause.fail(e) })),
+        Effect.flatMap(mutator),
+        Effect.provideService(transaction, tx),
+        Runtime.runPromiseExit(runtime),
+      );
+      return Exit.getOrElse(exit, (c) => {
+        // Extract underlying error bypassing FiberFailure
+        throw Cause.squash(c);
+      });
+    };
+  }
 
-  const use = <A>(fn: (transaction: Transaction<S>, options: { readonly signal: AbortSignal }) => PromiseLike<A>) =>
-    Effect.flatMap(ZeroClientTransaction, (transaction) =>
-      Effect.promise((signal) => fn(transaction, { signal })),
-    ).pipe(
-      Effect.tapErrorCause((cause) => Effect.logError(cause)),
-      Effect.sandbox,
-      Effect.annotateLogs({ module: prefixId("ZeroClient.Transaction"), method: "use" }),
-      Effect.mapError((cause) => new ZeroClientTransactionError({ cause })),
-    );
+  const unwrappedMutators = Rec.map(mutators, (v) =>
+    Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
+  ) as UnwrapMutators<TSchema, TMutators>;
 
-  const unwrapMutators = Effect.fn(function* <T extends AnyMutators>(mutators: T) {
-    const runtime = yield* Effect.runtime<Exclude<ExtractMutatorsRequirements<T>, ZeroClientTransaction>>();
-
-    function unwrapMutator<E>(mutator: AnyMutator<ExtractMutatorsRequirements<T>, E>) {
-      return async (tx: Transaction<S>, args: unknown) => {
-        const exit = await Schema.decode(mutator[MutatorArgsSchemaSym])(args).pipe(
-          Effect.catchTag("ParseError", (e) => new ZeroClientArgsParseError({ cause: Cause.fail(e) })),
-          Effect.flatMap(mutator),
-          Effect.provideService(ZeroClientTransaction, tx),
-          Runtime.runPromiseExit(runtime),
-        );
-        return Exit.getOrElse(exit, (c) => {
-          // Extract underlying error bypassing FiberFailure
-          throw Cause.squash(c);
-        });
-      };
-    }
-
-    return Rec.map(mutators, (v) =>
-      Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
-    ) as UnwrapMutators<S, T>;
-  });
-
-  const querySub = Effect.fn(function* <T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) {
-    const view = yield* Effect.acquireRelease(
-      Effect.sync(() => query.materialize()),
-      (view) => Effect.sync(() => view.destroy()),
-    );
-
-    const subscriptionRef = yield* SubscriptionRef.make<QueryResult<R>>(getDefaultSnapshot(query.format.singular));
-
-    yield* Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
-      Effect.sync(() => view.addListener((...args) => emit.single(args))),
-    ).pipe(
-      Stream.mapEffect(([data, resultType]) =>
-        Effect.sync(() => {
-          // logic here borrowed from: https://github.com/rocicorp/mono/blob/288b00ec94f5a9ae6e988513423af25c281dbb2a/packages/zero-react/src/use-query.tsx#L295
-          const cloned = data === undefined ? data : (deepClone(data as ReadonlyJSONValue) as HumanReadable<R>);
-          return getSnapshot<R>(query.format.singular, cloned, resultType);
-        }),
-      ),
-      Stream.runForEach((snapshot) => SubscriptionRef.set(subscriptionRef, snapshot)),
-      Effect.forkScoped,
-    );
-
-    return subscriptionRef.pipe(
-      Subscribable.map(([data, { type: status }]) => ({
-        data,
-        status,
-      })),
-    );
-  });
-
-  /** Create an Atom for the query */
-  const queryAtom = Atom.family(<T extends keyof S["tables"] & string, R>(query: Query<S, T, R>) =>
-    Atom.subscribable(querySub(query)).pipe(Atom.mapResult((res) => res.data)),
+  return yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      return new Zero({
+        ...options,
+        schema: transaction.schema,
+        mutators: unwrappedMutators,
+      });
+    }),
+    (zero) => Effect.promise(() => zero.close()),
   );
+});
 
-  return {
-    unwrapMutators,
-    querySub,
-    queryAtom,
-    Transaction: Object.assign(ZeroClientTransaction, { use }),
-  };
-};
+type UnwrapMutator<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutator> = Parameters<TMutators> extends []
+  ? (transaction: ZeroTransaction<TSchema>) => Promise<void>
+  : (
+      transaction: ZeroTransaction<TSchema>,
+      args: Schema.Schema.Encoded<TMutators[typeof Mutators.MutatorSchemaSymbol]>,
+    ) => Promise<void>;
 
-type UnwrapMutator<S extends ZeroSchema, T extends AnyMutator> = Parameters<T> extends []
-  ? (transaction: Transaction<S>) => Promise<void>
-  : (transaction: Transaction<S>, args: Schema.Schema.Encoded<T[typeof MutatorArgsSchemaSym]>) => Promise<void>;
-
-export type UnwrapMutators<S extends ZeroSchema, T extends AnyMutators> = {
-  [A in keyof T]: T[A] extends AnyMutator
-    ? UnwrapMutator<S, T[A]>
-    : { [B in keyof T[A]]: T[A][B] extends AnyMutator ? UnwrapMutator<S, T[A][B]> : never };
+type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators> = {
+  [A in keyof TMutators]: TMutators[A] extends Mutators.AnyMutator
+    ? UnwrapMutator<TSchema, TMutators[A]>
+    : {
+        [B in keyof TMutators[A]]: TMutators[A][B] extends Mutators.AnyMutator
+          ? UnwrapMutator<TSchema, TMutators[A][B]>
+          : never;
+      };
 } & {};
 
-export class ZeroClientTransactionError extends Data.TaggedError("ZeroClientTransactionError")<{
-  cause: Cause.Cause<unknown>;
-}> {}
-
-export class ZeroClientArgsParseError extends Data.TaggedError("ZeroClientArgsParseError")<{
-  cause: Cause.Cause<ParseResult.ParseError>;
+export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
+  readonly cause: Cause.Cause<ParseResult.ParseError>;
 }> {}

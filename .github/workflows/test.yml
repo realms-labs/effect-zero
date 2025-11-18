@@ -36,7 +36,7 @@ jobs:
           bun test:types
           bun zero-cache-dev > /dev/null 2>&1 &
           sleep 10
-          bun test
+          bun run test
       - uses: JoA-MoS/lcov-reporter-action@v1.0.0-alpha.4
         with:
           working-directory: ./tests

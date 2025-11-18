@@ -7,50 +7,40 @@
 import dotenv from "dotenv";
 
 dotenv.config({ path: "tests/.env", quiet: true });
+dotenv.config({ quiet: true });
 
-import { beforeAll, beforeEach, expect, expectTypeOf, test, vi } from "bun:test";
+import { createServer } from "node:http";
+import { beforeEach } from "node:test";
 import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
-import { BunHttpServer } from "@effect/platform-bun";
-import { Atom, Registry, Result } from "@effect-atom/atom";
-import { Zero } from "@rocicorp/zero";
-import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
-import { createSessionStorage } from "bun-storage";
+import { NodeHttpServer } from "@effect/platform-node";
+import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
+import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import {
-  Chunk,
-  Console,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  pipe,
-  Schema,
-  type Scope,
-  Stream,
-  Subscribable,
-} from "effect";
+import { Chunk, Console, Duration, Effect, Layer, Option, pipe, Schema, type Scope, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
-import * as ZeroClient from "effect-zero/client";
-import { MutatorSchema } from "effect-zero/mutators";
-import * as ZeroServer from "effect-zero/server";
-import { ZeroPushBody, ZeroPushParams, ZeroPushResponse } from "effect-zero/types";
+import * as Client from "effect-zero/client";
+import * as ClientTransaction from "effect-zero/client-transaction";
+import * as Mutators from "effect-zero/mutators";
+import * as Query from "effect-zero/query";
+import * as Server from "effect-zero/server";
+import * as ServerTransaction from "effect-zero/server-transaction";
+import { PushBody, PushParams, PushResponse } from "effect-zero/types";
 import { prefixId } from "effect-zero/utils";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
+import { WebSocket } from "undici";
 import { messages } from "./drizzle.schema";
-import { schema, type Schema as ZeroSchema } from "./schema";
+import { schema } from "./schema";
 import type { Message } from "./schema.gen";
 
-const [sessionStorage] = createSessionStorage();
-globalThis.sessionStorage = sessionStorage;
+globalThis.WebSocket = WebSocket as typeof globalThis.WebSocket;
 
 const rawDb = postgres(process.env.ZERO_UPSTREAM_DB!, { onnotice: () => {} });
 const ddb = drizzle(rawDb);
-const connection = new PostgresJSConnection(rawDb);
-const database = new ZQLDatabase(connection, schema);
+const database = zeroDrizzle(schema, ddb);
 
-const mutatorSchema = MutatorSchema.make({
+const mutatorSchema = Mutators.schema({
   messages: {
     create: Schema.Struct({
       id: Schema.String,
@@ -73,29 +63,29 @@ const mutatorSchema = MutatorSchema.make({
   concurrentTransactions: Schema.Void,
 });
 
-const zeroClient = ZeroClient.makeClient<ZeroSchema>();
+const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
+const serverTransaction = ServerTransaction.make("ServerTransaction", database, clientTransaction);
 
 const transformArgsClient = vi.fn(
   Effect.fn(function* (a) {
-    yield* zeroClient.Transaction.use(async () => {});
+    yield* clientTransaction.use(async () => {});
     return a;
   }),
 );
 
 const transformArgsServer = vi.fn(
   Effect.fn(function* (a) {
-    yield* zeroServer.Transaction.use(async () => {});
+    yield* serverTransaction.use(async () => {});
     return a;
   }),
 );
 
-const clientMutators = mutatorSchema.makeMutators({
+const clientMutators = Mutators.make(mutatorSchema, {
   messages: {
-    create: Effect.fn(function* (msg) {
-      yield* zeroClient.Transaction.use(async (tx) => {
+    create: (msg) =>
+      clientTransaction.use(async (tx) => {
         await tx.mutate.messages.insert(msg);
-      });
-    }),
+      }),
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
   optionalVoidArg: Effect.fn(function* (a) {}),
@@ -117,29 +107,33 @@ const clientMutators = mutatorSchema.makeMutators({
   concurrentTransactions: Effect.fn(function* () {}),
 });
 
-const serverMutators = mutatorSchema.makeMutators({
+const serverMutators = Mutators.make(mutatorSchema, {
   messages: {
     create: Effect.fn(function* (msg) {
-      yield* clientMutators.messages.create(msg).pipe(zeroServer.Transaction.execute);
+      yield* clientMutators.messages.create(msg).pipe(serverTransaction.execute);
     }),
   },
   optionalVoidArg: Effect.fn(function* () {}),
   transformArgs: Effect.fn(function* (a) {
-    return yield* transformArgsServer(a).pipe(zeroServer.Transaction.execute);
+    return yield* transformArgsServer(a).pipe(serverTransaction.execute);
   }),
   throwsError: Effect.fn(function* () {
     yield* Effect.void;
     throw new Error("error in throwsError");
   }),
   throwsErrorInsideTransaction: Effect.fn(function* () {
-    yield* zeroServer.Transaction.use(() => {
-      throw new Error("error in throwsErrorInsideTransaction");
-    }).pipe(zeroServer.Transaction.execute);
+    yield* serverTransaction
+      .use(() => {
+        throw new Error("error in throwsErrorInsideTransaction");
+      })
+      .pipe(serverTransaction.execute);
   }),
   throwsErrorAfterTransaction: Effect.fn(function* () {
-    yield* zeroServer.Transaction.use(async (tx) => {
-      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-    }).pipe(zeroServer.Transaction.execute);
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+      })
+      .pipe(serverTransaction.execute);
     throw new Error("error in throwsErrorAfterTransaction");
   }),
   clientThrowsError: Effect.fn(function* () {}),
@@ -147,80 +141,72 @@ const serverMutators = mutatorSchema.makeMutators({
     yield* Effect.fail(new Error("error in yieldsError"));
   }),
   yieldsErrorInsideTransaction: Effect.fn(function* () {
-    yield* Effect.fail(new Error("error in yieldsErrorInsideTransaction")).pipe(zeroServer.Transaction.execute);
+    yield* Effect.fail(new Error("error in yieldsErrorInsideTransaction")).pipe(serverTransaction.execute);
   }),
   yieldsErrorAfterTransaction: Effect.fn(function* () {
-    yield* zeroServer.Transaction.use(async (tx) => {
-      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-    }).pipe(zeroServer.Transaction.execute);
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+      })
+      .pipe(serverTransaction.execute);
     yield* Effect.fail(new Error("error in yieldsErrorAfterTransaction"));
   }),
   noTransaction: Effect.fn(function* () {}),
   doubleTransaction: Effect.fn(function* () {
-    yield* zeroServer.Transaction.use(async (tx) => {
-      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-    }).pipe(zeroServer.Transaction.execute);
-    yield* zeroServer.Transaction.use(async (tx) => {
-      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-    }).pipe(zeroServer.Transaction.execute);
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+      })
+      .pipe(serverTransaction.execute);
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+      })
+      .pipe(serverTransaction.execute);
   }),
   concurrentTransactions: Effect.fn(function* () {
     yield* Effect.all(
       [
-        zeroServer.Transaction.use(async (tx) => {
-          await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-        }).pipe(zeroServer.Transaction.execute),
-        zeroServer.Transaction.use(async (tx) => {
-          await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-        }).pipe(zeroServer.Transaction.execute),
+        serverTransaction
+          .use(async (tx) => {
+            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+          })
+          .pipe(serverTransaction.execute),
+        serverTransaction
+          .use(async (tx) => {
+            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+          })
+          .pipe(serverTransaction.execute),
       ],
       { concurrency: "unbounded" },
     );
   }),
 });
 
-const zeroServer = ZeroServer.makeServer({
-  database,
-  clientTransaction: zeroClient.Transaction,
-});
-
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
-function initZero() {
-  return new Zero({
-    userID: "anon",
-    server: "http://localhost:4848",
-    schema,
-    mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
-    mutateURL: "http://localhost:3000/push",
-    onError,
-  });
-}
-
-let z: ReturnType<typeof initZero>;
-
-function waitForLastItem<A, E, R>(stream: Stream.Stream<A, E, R>) {
+const waitForLastItem = Effect.fn("waitForLastItem")(<A, E, R>(stream: Stream.Stream<A, E, R>) => {
   return pipe(
     stream,
     Stream.timeout(Duration.millis(100)),
     Stream.runLast,
-    Effect.map(Option.getOrThrowWith(() => new Error("No items received from server"))),
-    Effect.scoped,
+    Effect.flatten,
+    Effect.catchTag("NoSuchElementException", () => Effect.fail(new Error("No items received from server"))),
   );
-}
+});
 
-let responses = Chunk.empty<ZeroPushResponse>();
+let responses = Chunk.empty<PushResponse>();
 
 beforeAll(async () => {
   const router = HttpRouter.empty.pipe(
     HttpRouter.post(
       "/push",
       Effect.gen(function* () {
-        const params = yield* HttpRouter.schemaParams(ZeroPushParams);
-        const payload = yield* HttpServerRequest.schemaBodyJson(ZeroPushBody);
-        const result = yield* zeroServer.processPush(serverMutators, params, payload);
+        const params = yield* HttpRouter.schemaParams(PushParams);
+        const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
+        const result = yield* Server.processPush(serverTransaction, serverMutators, params, payload);
         // yield* Effect.log("Push result:", result);
-        const responseBody = yield* Schema.encode(ZeroPushResponse)(result);
+        const responseBody = yield* Schema.encode(PushResponse)(result);
 
         responses = Chunk.append(responses, responseBody);
 
@@ -244,7 +230,7 @@ beforeAll(async () => {
     const serverStarted = yield* Effect.makeLatch();
     const app = router.pipe(
       HttpServer.serve(),
-      Layer.provide(BunHttpServer.layer({ port: 3000 })),
+      Layer.provide(NodeHttpServer.layer(() => createServer(), { port: 3000 })),
       Layer.tap(() => serverStarted.open),
     );
     yield* Layer.launch(app).pipe(Effect.forkDaemon);
@@ -254,35 +240,62 @@ beforeAll(async () => {
   await Effect.runPromise(server);
 });
 
-beforeEach(async () => {
+beforeEach(() => {
   onError.mockReset();
 
-  responses = Chunk.empty<ZeroPushResponse>();
+  responses = Chunk.empty<PushResponse>();
+});
 
-  if (z) {
-    await z.close();
-  }
-  z = initZero();
+const initZero = Effect.gen(function* () {
+  const z = yield* Client.make(clientTransaction, clientMutators, {
+    userID: "anon",
+    server: "http://localhost:4848",
+    mutateURL: "http://localhost:3000/push",
+    onError,
+  });
 
-  const c = await ddb
-    .select({ count: count() })
-    .from(messages)
-    .then((r) => r[0]!.count);
+  const c = yield* Effect.promise(() =>
+    ddb
+      .select({ count: count() })
+      .from(messages)
+      .then((r) => r[0]!.count),
+  );
   if (c > 0) {
-    await rawDb`truncate table messages`;
+    yield* Effect.promise(() => rawDb`truncate table messages`);
 
     // Wait until view is synced after truncation
-    const sub = zeroClient.querySub(z.query.messages);
-    await pipe(
-      Subscribable.unwrap(sub).changes,
+    const sub = yield* Query.subscribe(z, z.query.messages);
+    yield* pipe(
+      sub.changes,
       Stream.filter((d) => d.status === "complete"),
       waitForLastItem,
       Effect.andThen((d) => Effect.fail(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
-      Effect.scoped,
-      Effect.runPromise,
     );
   }
+
+  return z;
 });
+
+// const queryAtom = Atom.family(
+//   <T extends keyof (typeof schema)["tables"] & string, R>(query: ZeroQuery<typeof schema, T, R>) =>
+//     Atom.make((get) =>
+//       Effect.gen(function* () {
+//         const z = yield* get.result(zeroAtom);
+//         const sub = yield* Query.subscribe(z, query);
+//         return sub.changes;
+//       }).pipe((e) =>
+//         Stream.unwrap(
+//           e as Effect.Effect<
+//             Effect.Effect.Success<typeof e>,
+//             Effect.Effect.Error<typeof e>,
+//             // Pretend this effect doesn't have a scope requirement to make the type inference work as expected
+//             // TODO: ask Effect team to fix this
+//             Exclude<Effect.Effect.Context<typeof e>, Scope.Scope>
+//           >,
+//         ),
+//       ),
+//     ),
+// );
 
 test("server is running", async () => {
   const response = await fetch("http://localhost:3000/health");
@@ -290,7 +303,7 @@ test("server is running", async () => {
 });
 
 test("processPush has no extra requirements", () => {
-  const effect = zeroServer.processPush(serverMutators, {} as any, {} as any);
+  const effect = Server.processPush(serverTransaction, serverMutators, {} as any, {} as any);
 
   expectTypeOf<Effect.Effect.Context<typeof effect>>().toEqualTypeOf<never>();
 });
@@ -299,7 +312,7 @@ test("mutators should have correct argument types", () => {
   expectTypeOf<Parameters<typeof clientMutators.optionalVoidArg>>().toEqualTypeOf<[(void | undefined)?]>();
   expectTypeOf<Parameters<typeof clientMutators.throwsError>>().toEqualTypeOf<[]>();
   expectTypeOf<Parameters<typeof clientMutators.messages.create>>().toEqualTypeOf<
-    [Schema.Schema.Type<typeof mutatorSchema.schema.messages.create>]
+    [Schema.Schema.Type<typeof mutatorSchema.messages.create>]
   >();
 });
 
@@ -312,11 +325,13 @@ test("mutator requirements should propagate", () => {
     succeed: {},
   }) {}
 
-  const mutatorSchema = MutatorSchema.make({
+  const clientTransaction = ClientTransaction.make("DummyClientTransaction", schema);
+  const serverTransaction = ServerTransaction.make("DummyServerTransaction", database, clientTransaction);
+  const mutatorSchema = Mutators.schema({
     dummy: Schema.Void,
     dummy2: Schema.Void,
   });
-  const mutators = mutatorSchema.makeMutators({
+  const mutators = Mutators.make(mutatorSchema, {
     dummy: Effect.fn(function* () {
       yield* DummyTag;
     }),
@@ -324,228 +339,279 @@ test("mutator requirements should propagate", () => {
       yield* DummyTag2;
     }),
   });
-  const clientEffect = zeroClient.unwrapMutators(mutators);
-  const serverEffect = zeroServer.processPush(mutators, {} as any, {} as any);
+  const serverEffect = Server.processPush(serverTransaction, mutators, {} as any, {} as any);
 
-  expectTypeOf<Effect.Effect.Context<typeof clientEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
+  // expectTypeOf<Effect.Effect.Context<typeof clientEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
   expectTypeOf<Effect.Effect.Context<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
 
-test("rows are returned after data is inserted", async () => {
-  const value1 = {
-    id: nanoid(),
-    body: "hello world",
-  };
-  await ddb.insert(messages).values(value1);
+it.scopedLive(
+  "rows are returned after data is inserted",
+  Effect.fn(function* () {
+    const z = yield* initZero;
 
-  const sub = zeroClient.querySub(z.query.messages);
+    const value1 = {
+      id: nanoid(),
+      body: "hello world",
+    };
+    yield* Effect.promise(() => ddb.insert(messages).values(value1));
 
-  expectTypeOf<Effect.Effect.Context<typeof sub>>().toEqualTypeOf<Scope.Scope>();
+    const subEffect = Query.subscribe(z, z.query.messages);
+    expectTypeOf<Effect.Effect.Context<typeof subEffect>>().toEqualTypeOf<Scope.Scope>();
+    const sub = yield* subEffect;
 
-  {
-    const result = await pipe(
-      Subscribable.unwrap(sub).changes,
-      Stream.filter((d) => d.status === "complete"),
-      waitForLastItem,
-      Effect.runPromise,
+    {
+      const result = yield* pipe(
+        sub.changes,
+        Stream.filter((d) => d.status === "complete"),
+        waitForLastItem,
+      );
+
+      expect(result.data).toEqual([value1]);
+    }
+
+    const value2 = {
+      id: nanoid(),
+      body: "hello world 2",
+    };
+    yield* Effect.promise(() => ddb.insert(messages).values(value2));
+
+    {
+      const result = yield* pipe(
+        sub.changes,
+        Stream.filter((d) => d.status === "complete"),
+        waitForLastItem,
+      );
+
+      expect(result.data).toHaveLength(2);
+      expect(result.data).toEqual(expect.arrayContaining([value1, value2]));
+    }
+  }),
+);
+
+it.scopedLive(
+  "custom mutators work",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const item: Message = { id: nanoid(), body: "Hello, world!" };
+    yield* Effect.promise(() => z.mutate.messages.create(item).server);
+
+    const result = yield* Effect.promise(() => rawDb`select id, body from messages`);
+    expect(result.slice()).toEqual([item]);
+  }),
+);
+
+it.scopedLive(
+  "schema validation is applied to mutator arguments",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    yield* Effect.tryPromise({
+      try: async () => {
+        const mut = z.mutate.messages.create({} as any);
+        await mut.client.catch(Effect.fail);
+        await mut.server.catch(Effect.fail);
+      },
+      catch: (e) => {
+        expect(e).toSatisfy(Predicate.isTagged("ClientArgsParseError"));
+      },
+    });
+  }),
+);
+
+it.scopedLive(
+  "schema transformations are applied to mutator arguments",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    expectTypeOf<Parameters<typeof z.mutate.transformArgs>>().toEqualTypeOf<
+      [Schema.Schema.Encoded<typeof mutatorSchema.transformArgs>]
+    >();
+    expectTypeOf<Parameters<typeof clientMutators.transformArgs>>().toEqualTypeOf<
+      [Schema.Schema.Type<typeof mutatorSchema.transformArgs>]
+    >();
+
+    yield* Effect.promise(() => z.mutate.transformArgs({ foo: "1" }).server);
+
+    expect(transformArgsClient).toBeCalledWith({ foo: 1 });
+    expect(transformArgsServer).toBeCalledWith({ foo: 1 });
+  }),
+);
+
+it.scopedLive(
+  "mutator that throws error should reject",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    yield* Effect.promise(() =>
+      expect(z.mutate.throwsError().server).rejects.toEqual({
+        error: "app",
+        details: "error in throwsError",
+      }),
     );
+  }),
+);
 
-    expect(result.data).toEqual([value1]);
-  }
+it.scopedLive(
+  "mutator that throws error inside transaction should reject",
+  Effect.fn(function* () {
+    const z = yield* initZero;
 
-  const value2 = {
-    id: nanoid(),
-    body: "hello world 2",
-  };
-  await ddb.insert(messages).values(value2);
+    yield* Effect.tryPromise({
+      try: async () => {
+        const mut = z.mutate.throwsErrorInsideTransaction();
+        await mut.server.catch(Effect.fail);
+      },
+      catch: (e) =>
+        expect(e).toEqual({
+          error: "app",
+          details: "error in throwsErrorInsideTransaction",
+        }),
+    });
+  }),
+);
 
-  {
-    const result = await pipe(
-      Subscribable.unwrap(sub).changes,
-      Stream.filter((d) => d.status === "complete"),
-      waitForLastItem,
-      Effect.runPromise,
+it.scopedLive(
+  "mutator that throws error after transaction should resolve",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    yield* Effect.promise(() => expect(z.mutate.throwsErrorAfterTransaction().server).resolves.toBeDefined());
+  }),
+);
+
+it.scopedLive(
+  "client mutator that throws error should reject",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const mut = z.mutate.clientThrowsError();
+
+    yield* Effect.promise(() => expect(mut.client).rejects.toThrowError("client error"));
+    yield* Effect.promise(() => expect(mut.server).rejects.toThrowError("client error"));
+  }),
+);
+
+it.scopedLive(
+  "mutator that yields error should reject",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    yield* Effect.promise(() =>
+      expect(z.mutate.yieldsError().server).rejects.toEqual({
+        error: "app",
+        details: "error in yieldsError",
+      }),
     );
+  }),
+);
 
-    expect(result.data).toBeArrayOfSize(2);
-    expect(result.data).toContainAllValues([value1, value2]);
-  }
-});
+it.scopedLive(
+  "mutator that yields error inside transaction should reject",
+  Effect.fn(function* () {
+    const z = yield* initZero;
 
-test("atom is set to correct value", async () => {
-  const atom = zeroClient.queryAtom(z.query.messages);
-
-  {
-    const result = atom.pipe(Atom.get, Effect.provide(Registry.layer), Effect.runSync, Result.getOrThrow);
-
-    expect(result).toEqual([]);
-  }
-
-  const value1 = {
-    id: nanoid(),
-    body: "hello world",
-  };
-  await ddb.insert(messages).values(value1);
-
-  {
-    const result = await pipe(
-      Atom.toStreamResult(atom),
-      waitForLastItem,
-      Effect.provide(Registry.layer),
-      Effect.runPromise,
+    yield* Effect.promise(() =>
+      expect(z.mutate.yieldsErrorInsideTransaction().server).rejects.toEqual({
+        error: "app",
+        details: "error in yieldsErrorInsideTransaction",
+      }),
     );
+  }),
+);
 
-    expect(result).toEqual([value1]);
-  }
+it.scopedLive(
+  "mutator that yields error after transaction should resolve",
+  Effect.fn(function* () {
+    const z = yield* initZero;
 
-  const value2 = {
-    id: nanoid(),
-    body: "hello world 2",
-  };
-  await ddb.insert(messages).values(value2);
+    yield* Effect.promise(() => expect(z.mutate.yieldsErrorAfterTransaction().server).resolves.toBeDefined());
+  }),
+);
 
-  {
-    const result = await pipe(
-      Atom.toStreamResult(atom),
-      waitForLastItem,
-      Effect.provide(Registry.layer),
-      Effect.runPromise,
-    );
+it.scopedLive(
+  "mutator without transaction should reject",
+  Effect.fn(function* () {
+    const z = yield* initZero;
 
-    expect(result).toBeArrayOfSize(2);
-    expect(result).toContainAllValues([value1, value2]);
-  }
-});
+    yield* Effect.tryPromise({
+      try: async () => {
+        const mut = z.mutate.noTransaction();
+        await mut.server.catch(Effect.fail);
+      },
+      catch: (e) =>
+        expect(e).toEqual({
+          error: "app",
+          details: "No transaction detected in a mutation, a transaction is required.",
+        }),
+    });
+  }),
+);
 
-test("custom mutators work", async () => {
-  const item: Message = { id: nanoid(), body: "Hello, world!" };
-  await z.mutate.messages.create(item).server;
+it.scopedLive(
+  "mutator that invokes transaction more than once should resolve",
+  Effect.fn(function* () {
+    const z = yield* initZero;
 
-  const result = await rawDb`select id, body from messages`;
-  expect(result.slice()).toEqual([item]);
-});
+    yield* Effect.promise(() => expect(z.mutate.doubleTransaction().server).resolves.toBeDefined());
+  }),
+);
 
-test("schema validation is applied to mutator arguments", async () => {
-  const mut = z.mutate.messages.create({} as any);
-  await mut.client.catch((e) => {
-    expect(e).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
-  });
-  await mut.server.catch((e) => {
-    expect(e).toSatisfy(Predicate.isTagged("ZeroClientArgsParseError"));
-  });
-});
+it.scopedLive(
+  "out of order mutations should be rejected",
+  Effect.fn(function* () {
+    const z = yield* initZero;
 
-test("schema transformations are applied to mutator arguments", async () => {
-  expectTypeOf<Parameters<typeof z.mutate.transformArgs>>().toEqualTypeOf<
-    [Schema.Schema.Encoded<typeof mutatorSchema.schema.transformArgs>]
-  >();
-  expectTypeOf<Parameters<typeof clientMutators.transformArgs>>().toEqualTypeOf<
-    [Schema.Schema.Type<typeof mutatorSchema.schema.transformArgs>]
-  >();
+    yield* Effect.promise(() => z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server);
 
-  await z.mutate.transformArgs({ foo: "1" }).server;
+    // Simulate database corruption
+    yield* Effect.promise(() => rawDb`truncate table zero_0.clients`);
 
-  expect(transformArgsClient).toBeCalledWith({ foo: 1 });
-  expect(transformArgsServer).toBeCalledWith({ foo: 1 });
-});
-
-test("mutator that throws error should reject", async () => {
-  expect(z.mutate.throwsError().server).rejects.toEqual({
-    error: "app",
-    details: "error in throwsError",
-  });
-});
-
-test("mutator that throws error inside transaction should reject", async () => {
-  expect(z.mutate.throwsErrorInsideTransaction().server).rejects.toEqual({
-    error: "app",
-    details: "error in throwsErrorInsideTransaction",
-  });
-});
-
-test("mutator that throws error after transaction should resolve", async () => {
-  expect(z.mutate.throwsErrorAfterTransaction().server).resolves.toBeDefined();
-});
-
-test("client mutator that throws error should reject", async () => {
-  const mut = z.mutate.clientThrowsError();
-
-  await Promise.allSettled([mut.client, mut.server]);
-
-  expect(mut.client).rejects.toThrowError("client error");
-  expect(mut.server).rejects.toThrowError("client error");
-});
-
-test("mutator that yields error should reject", async () => {
-  expect(z.mutate.yieldsError().server).rejects.toEqual({
-    error: "app",
-    details: "error in yieldsError",
-  });
-});
-
-test("mutator that yields error inside transaction should reject", async () => {
-  expect(z.mutate.yieldsErrorInsideTransaction().server).rejects.toEqual({
-    error: "app",
-    details: "error in yieldsErrorInsideTransaction",
-  });
-});
-
-test("mutator that yields error after transaction should resolve", async () => {
-  expect(z.mutate.yieldsErrorAfterTransaction().server).resolves.toBeDefined();
-});
-
-test("mutator without transaction should reject", async () => {
-  expect(z.mutate.noTransaction().server).rejects.toEqual({
-    error: "app",
-    details: "No transaction detected in a mutation, a transaction is required.",
-  });
-});
-
-test("mutator that invokes transaction more than once should resolve", async () => {
-  await expect(z.mutate.doubleTransaction().server).resolves.toBeDefined();
-});
-
-test("out of order mutations should be rejected", async () => {
-  await z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server;
-
-  // Simulate database corruption
-  await rawDb`truncate table zero_0.clients`;
-
-  /*
+    /*
     In case of "out of order" error, the mutation promise is not rejected, but retried under the hood.
     Since it won't ever be resolved or rejected in our case, we just run the mutation and check that
     the last server response was "oooMutation" error.
   */
-  z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server.then();
+    z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server.then();
 
-  await Effect.sleep(Duration.millis(100)).pipe(Effect.runPromise);
+    yield* Effect.sleep(Duration.millis(100));
 
-  const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
-  expect(lastResponse).toHaveProperty(["mutations", 0, "result", "error"], "oooMutation");
-});
+    const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
+    expect(lastResponse).toHaveProperty(["mutations", 0, "result", "error"], "oooMutation");
+  }),
+);
 
-test("non-existing mutator should reject", async () => {
-  const mutatorSchema = MutatorSchema.make({
-    nonExistingMutator: Schema.Void,
-  });
-  const clientMutators = mutatorSchema.makeMutators({
-    nonExistingMutator: Effect.fn(function* () {}),
-  });
-  const z = new Zero({
-    userID: "anon",
-    server: "http://localhost:4848",
-    schema,
-    mutators: zeroClient.unwrapMutators(clientMutators).pipe(Effect.runSync),
-    mutateURL: "http://localhost:3000/push",
-    onError,
-  });
+it.scopedLive(
+  "non-existing mutator should reject",
+  Effect.fn(function* () {
+    const mutatorSchema = Mutators.schema({
+      nonExistingMutator: Schema.Void,
+    });
+    const clientMutators = Mutators.make(mutatorSchema, {
+      nonExistingMutator: Effect.fn(function* () {}),
+    });
+    const z = yield* Client.make(clientTransaction, clientMutators, {
+      userID: "anon",
+      server: "http://localhost:4848",
+      mutateURL: "http://localhost:3000/push",
+      onError,
+    });
 
-  expect(z.mutate.nonExistingMutator().server).rejects.toEqual({
-    error: "app",
-    details: "Internal error",
-  });
-});
+    yield* Effect.promise(() =>
+      expect(z.mutate.nonExistingMutator().server).rejects.toEqual({
+        error: "app",
+        details: "Internal error",
+      }),
+    );
+  }),
+);
 
-test("concurrent transactions should be resolved", async () => {
-  await expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined();
-});
+it.scopedLive(
+  "concurrent transactions should be resolved",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    yield* Effect.promise(() => expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined());
+  }),
+);
