@@ -54,7 +54,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
         mutators: unwrappedMutators,
       });
     }),
-    (zero) => Effect.sync(() => zero.close()),
+    (zero) => Effect.promise(() => zero.close()),
   );
 });
 
@@ -75,6 +75,6 @@ type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMu
       };
 } & {};
 
-class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
+export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
   readonly cause: Cause.Cause<ParseResult.ParseError>;
 }> {}

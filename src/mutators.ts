@@ -58,11 +58,11 @@ export type ExtractMutatorsRequirements<TMutators extends AnyMutators> = TMutato
   : never;
 
 export const schema = <TSchema extends AnyMutatorSchemas>(schema: TSchema) => schema;
+
 export function make<TSchema extends AnyMutatorSchemas, TFns extends MutatorFns<TSchema>>(
   schema: TSchema,
   mutators: TFns,
 ): Mutators<TSchema, TFns>;
-
 export function make(schema: AnyMutatorSchemas, mutators: AnyMutatorFns): AnyMutators {
   function makeMutator(schema: AnyMutatorSchema, fn: AnyMutatorFn) {
     return Object.assign(fn, { [MutatorSchemaSymbol]: schema });
