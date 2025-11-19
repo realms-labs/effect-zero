@@ -1,5 +1,6 @@
 import path from "node:path";
-import { $, Glob } from "bun";
+import { $ } from "bun";
+import fg from "fast-glob";
 import fs from "fs-extra";
 
 const outDir = "out";
@@ -14,12 +15,9 @@ await fs.move(tsOutDir, path.join(outDir, tsOutDir));
 
 const packageJson = await Bun.file("package.json").json();
 const version = packageJson.version as string;
-// TODO: export the `effect-zero/index` as just `effect-zero` (so you can do `import * as Zfx from "effect-zero"`)
-// TODO: probably make this a manual list and do not export `utils.ts` nor `server-internal.ts`
-//       or perhaps, we move them to `internal/utils.ts` and `internal/server.ts` respectively, and exclude internal/*
-const glob = new Glob("src/**/*.ts");
+const filePaths = await fg(["src/**/*.ts", "!src/internal"]);
 const exports: Record<string, { import: { types: string; default: string } }> = {};
-for await (const filePath of glob.scan({ absolute: true })) {
+for await (const filePath of filePaths) {
   const relPath = path.relative("src", filePath);
   const importPath = relPath.replace(/\.ts$/, "");
   const basePath = path.join(tsOutDir, importPath);

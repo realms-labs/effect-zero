@@ -1,34 +1,45 @@
+import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
+import { handleGetQueriesRequest } from "@rocicorp/zero/server";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Chunk from "effect/Chunk";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
+import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
-import * as Mutators from "./mutators.js";
 import {
   MutationAlreadyProcessedError,
   OutOfOrderMutationError,
   ServerSynchronizationContext,
   ServerTransactionInput,
-} from "./server-internal.js";
+} from "./internal/server.js";
+import { prefixId } from "./internal/utils.js";
+import * as Mutators from "./mutators.js";
+import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
-import * as Types from "./types.js";
-import { prefixId } from "./utils.js";
+import * as Types from "./types/push.js";
+import type { TransformRequestMessage } from "./types/queries.js";
 
-type ServerTransactionContext<TTransaction> = Omit<
-  ReturnType<typeof ServerTransaction.make<string, TTransaction>>,
+type ServerTransactionContext<TSchema extends ZeroSchema, TTransaction> = Omit<
+  ReturnType<typeof ServerTransaction.make<string, TSchema, TTransaction>>,
   "use"
 >;
 
-export const processPush = Effect.fn(function* <TTransaction, TMutators extends Mutators.AnyMutators>(
-  transaction: ServerTransactionContext<TTransaction>,
+export const processPush = Effect.fn(function* <
+  TSchema extends ZeroSchema,
+  TTransaction,
+  TMutators extends Mutators.AnyMutators,
+>(
+  transaction: ServerTransactionContext<TSchema, TTransaction>,
   mutators: TMutators,
   params: Types.PushParams,
   request: Types.PushBody,
@@ -41,7 +52,7 @@ export const processPush = Effect.fn(function* <TTransaction, TMutators extends 
     Stream.mapEffect(
       Effect.fn(function* (mutation) {
         if (mutation.type !== "custom") {
-          return yield* new CustomMutationExpectedError({});
+          return yield* new CustomMutationExpectedError();
         }
         return yield* processMutation<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
           Effect.catchAll((e) => processMutationError(transaction, e)),
@@ -107,8 +118,8 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
   );
 });
 
-const processMutationError = Effect.fn(function* <TTransaction>(
-  transaction: ServerTransactionContext<TTransaction>,
+const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TTransaction>(
+  transaction: ServerTransactionContext<TSchema, TTransaction>,
   e: unknown,
 ) {
   const { clientID, mutationID } = yield* ServerTransactionInput;
@@ -144,7 +155,7 @@ const processMutationError = Effect.fn(function* <TTransaction>(
 class WriteMutationResultError extends Data.TaggedError("WriteMutationResultError")<{
   readonly cause: Cause.Cause<unknown>;
 }> {}
-class CustomMutationExpectedError extends Data.TaggedError("CustomMutationExpectedError")<object> {}
+class CustomMutationExpectedError extends Data.TaggedError("CustomMutationExpectedError") {}
 class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
   readonly name: string;
 }> {}
@@ -167,3 +178,54 @@ class MutationUserError extends Data.TaggedError("MutationUserError")<{
     return err instanceof Error ? err.message : "exception was not of type `Error`";
   }
 }
+
+export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
+  queries: MakeQueryResult<E, R1, R2>[],
+  schema: ZeroSchema,
+  payload: TransformRequestMessage,
+) {
+  const runtime = yield* Effect.runtime<R1 | R2>();
+  return yield* Effect.tryPromise({
+    try: () =>
+      handleGetQueriesRequest(
+        (name, args) =>
+          Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
+            Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ name })),
+            Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
+            Effect.map((query) => ({ query })),
+            (effect) => Runtime.runPromiseExit(runtime, effect),
+            (exit) =>
+              exit.then(
+                Exit.getOrElse((cause) => {
+                  throw new QueryUserError<E>({ cause });
+                }),
+              ),
+          ),
+        schema,
+        payload as ReadonlyJSONValue,
+      ),
+    catch: (e) =>
+      Option.liftPredicate(e, QueryUserError.is<E>).pipe(
+        Option.flatMap((e) => Cause.failureOption(e.cause)),
+        Option.getOrElse(() => new GetQueriesError({ cause: Cause.fail(e) })),
+      ),
+  });
+});
+
+class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> {
+  override get message() {
+    return `Query not found: ${this.name}`;
+  }
+}
+
+const QueryUserErrorTypeId = Symbol.for(prefixId("QueryUserError"));
+class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{
+  cause: Cause.Cause<E | ParseResult.ParseError | QueryNotFound>;
+}> {
+  readonly [QueryUserErrorTypeId] = QueryUserErrorTypeId;
+  static is<E>(e: unknown): e is QueryUserError<E> {
+    return Predicate.hasProperty(e, QueryUserErrorTypeId);
+  }
+}
+
+class GetQueriesError extends Data.TaggedError("GetQueriesError")<{ cause: Cause.Cause<unknown> }> {}

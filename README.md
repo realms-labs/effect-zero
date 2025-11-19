@@ -1,64 +1,95 @@
 # effect-zero
 
-## Server Setup
+## Custom mutators
+### Defining mutators schema
+```ts
+// mutators.ts
+
+import * as Mutators from "effect-zero/mutators";
+
+// Define your mutators schema
+// Both root-level and nested mutators are supported (up to 1 level of nesting)
+export const mutatorSchema = Mutators.schema({
+  // root-level mutator
+  /*
+  foo: Schema.Struct({
+    message: Schema.String,
+  }),
+  // mutator without arguments
+  /*
+  bar: Schema.Void,
+  */
+  todo: {
+    // nested mutator
+    create: Schema.Struct({
+      id: Schema.String,
+      title: Schema.String,
+    }),
+    toggle: Schema.Struct({
+      id: Schema.String,
+      done: Schema.Boolean,
+    }),
+  },
+});
+```
+
+### Server setup
 
 ```ts
-// server/zero.ts
-import { PostgresJSConnection, ZQLDatabase } from "@rocicorp/zero/pg";
-import { ZeroPushResponse, ZeroPushParams, ZeroPushBody } from "effect-zero/types";
-import * as ZeroServer from "effect-zero/server";
+// server.ts
+
+import { zeroPostgresJS } from "@rocicorp/zero/server/adapters/postgresjs";
+import { PushResponse, PushParams, PushBody } from "effect-zero/types/push";
+import * as ServerTransaction from "effect-zero/server-transaction";
+import * as Server from "effect-zero/server";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import postgres from "postgres";
-import { zeroClient } from '../client/zero'; // optional (see below)
+import { clientTransaction } from "./client"; // see below
+import { mutatorSchema } from "./mutators";
 
 // zero schema (define or use something like drizzle-zero)
 import { schema } from "./schema";
 
 // setup connection
-const connection = new PostgresJSConnection(postgres(process.env.DATABASE_URL!));
-const database = new ZQLDatabase(connection, schema);
+// for more driver options, see: https://zero.rocicorp.dev/docs/zql-on-the-server#creating-a-database
+const database = zeroPostgresJS(
+  schema,
+  postgres(process.env.ZERO_UPSTREAM_DB!),
+);
 
-// the "server-side" zero instance
-export const zero = ZeroServer.makeServer({
+// The "server-side" transaction
+const serverTransaction = ServerTransaction.make(
+  "ServerTransaction",
   database,
-  // this part is optional, but it allows us to use the client mutators on the server side
-  clientTransaction: zeroClient.Transaction,
-});
+  // passing a client transaction allows us to use the client mutators on the server side
+  clientTransaction,
+);
 
-// define mutators (same as client, see below)
-// in practice this can be a centralized file which is imported in both places
-export type MutatorArgs = {
+// define server mutators
+export const serverMutators = Mutators.make(mutatorSchema, {
   todo: {
-    create: { id: string; title: string };
-    toggle: { id: string; done: boolean };
-  };
-};
-
-// define mutators.
-export const serverMutators = zero.mutators<MutatorArgs>()({
-  todo: {
-    create: Effect.fn(function* ({ id, title }) {
+    create: ({ id, title }) => Effect.gen(function* () {
       // Note, we can run arbitrary logic before/after performing the zero transaction
       // this is a unique feature which is not supported by the default zero push processor implementation
       // shipped with the base `@rocicorp/zero` package
       
       // before the transaction
-      yield Effect.log("before the transaction");
+      yield* Effect.log("before the transaction");
 
       Effect.gen(function* () {
         // during the transaction
-        yield Effect.log("during the transaction");
-        yield* zero.Transaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
-        yield* zero.Transaction.use((tx) => tx.mutate.TodoTable.update({ id, done: false }));
+        yield* Effect.log("during the transaction");
+        yield* serverTransaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
+        yield* serverTransaction.use((tx) => tx.mutate.TodoTable.update({ id, done: false }));
         // ...
-      }).pipe(zero.Transaction.execute);
+      }).pipe(serverTransaction.execute);
 
       // after the transaction
-      yield Effect.log("after the transaction");
+      yield* Effect.log("after the transaction");
     }),
     toggle: Effect.fn(function* ({ id, done }) {
-      yield* zero.Transaction.use((tx) => tx.mutate.TodoTable.update({ id, done })).pipe(zero.Transaction.execute);
+      yield* serverTransaction.use((tx) => tx.mutate.TodoTable.update({ id, done })).pipe(serverTransaction.execute);
     }),
   },
 });
@@ -66,42 +97,36 @@ export const serverMutators = zero.mutators<MutatorArgs>()({
 // handler for push endpoint
 // Note: this is framework-agnostic so that is why Effect.runPromise is used below, however this is of course not needed
 // if your server framework is effect-based (like Effect HTTP module)
-
 export async function handleZeroPush(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  const urlParams = Schema.decodeSync(ZeroPushParams)({
+  const urlParams = Schema.decodeSync(PushParams)({
     schema: url.searchParams.get("schema")!,
     appID: url.searchParams.get("appID")!,
   });
-  const payload = Schema.decodeSync(ZeroPushBody)(await req.json());
+  const payload = Schema.decodeSync(PushBody)(await req.json());
 
-  const result = await Effect.runPromise(zero.processPush(serverMutators, urlParams, payload));
-  const responseBody = Schema.encodeSync(ZeroPushResponse)(result);
+  const result = await Effect.runPromise(Server.processPush(serverTransaction, serverMutators, urlParams, payload));
+  const responseBody = Schema.encodeSync(PushResponse)(result);
   return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
 }
 ```
 
-## Client Setup
+### Client setup
 
 ```ts
-// client/zero.ts
+// client.ts
 import { Zero } from "@rocicorp/zero";
-import * as ZeroClient from "effect-zero/client";
+import * as ClientTransaction from "effect-zero/client-transaction";
 import * as Effect from "effect/Effect";
 import { schema } from "./schema"; // your schema
+import { mutatorSchema } from "./mutators"; // see below
 
-// as mentioned above, this can be centralized between client and server
-export type MutatorArgs = {
-  todo: {
-    create: { id: string; title: string };
-    toggle: { id: string; done: boolean };
-  };
-};
+const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
 
-// The "client-side" zero instance
-export const zeroClient = ZeroClient.makeClient<typeof schema>();
+// The "client-side" transaction
+export const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
 
-export const clientMutators = zeroClient.mutators<MutatorArgs>()({
+export const clientMutators = Mutators.make(mutatorSchema, {
   todo: {
     create: Effect.fn(function* ({ id, title }) {
       yield* zeroClient.Transaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
@@ -112,67 +137,85 @@ export const clientMutators = zeroClient.mutators<MutatorArgs>()({
   },
 });
 
-export async function createZero(opts: { userID: string; auth?: string; server: string }) {
-  const mutators = await Effect.runPromise(zeroClient.unwrapMutators(clientMutators));
-  return new Zero({
+// Helper to create a vanilla Zero client instance for querying and mutating
+export const createZero = Effect.fn(function* (opts: { userID: string; auth?: string; server: string }) {
+  // `Client.make` returns an Effect containing a Zero client instance
+  return yield* Client.make(clientTransaction, clientMutators, {
     userID: opts.userID,
     auth: opts.auth,
     server: opts.server, // your push/pull endpoint base URL
-    schema,
     kvStore: "idb", // or "mem" for in-memory
-    mutators,
+    // "mutators" and "schema" are inferred from other arguments, so we don't need to pass them here
   });
+});
+```
+
+## Synced queries
+
+### Defining queries
+```ts
+// queries.ts
+
+import { createBuilder } from "@rocicorp/zero";
+import * as Query from "effect-zero/query";
+import { schema } from "./schema"; // your schema
+
+const builder = createBuilder(schema);
+
+export const getTodoByIdQuery = Query.make({
+  name: "listTodos",
+  payload: Schema.Tuple(Schema.String),
+  query: Effect.fn(function* (id) {
+    return yield* Effect.succeed(builder.todos.where("id", id).one());
+  }),
+});
+
+// Add all your queries here
+export const queries = [
+  getTodoByIdQuery,
+];
+```
+
+### Server setup
+```ts
+// server.ts
+
+import * as Server from "effect-zero/server";
+import { TransformRequestMessage } from "effect-zero/types/queries";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { queries } from "./queries";
+
+// See `handleZeroPush` notes
+export async function handleZeroGetQueries(req: Request): Promise<Response> {
+  const payload = Schema.decodeSync(TransformRequestMessage)(await req.json());
+  const result = await Effect.runPromise(Server.handleGetQueries(queries, schema, payload));
+  return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
 }
 ```
 
-## Query Atoms
+### Client setup
 
 ```ts
-// state/todos.ts
-import { Atom } from "@effect-atom/atom";
-import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import { createZero, zero } from "../client/zero";
+// client.ts
 
-// build/load the zero instance
-const zeroAtom = Atom.make(
-  Effect.fn(function* (get) {
-    const zero = yield* Effect.promise(() => createZero({ ... }));
-    
-    //add finalizer
-    get.addFinalizer(() => {
-      zero.close();
-    });
+import * as Effect from 'effect/Effect';
+import * as Query from "effect-zero/query";
+import { getTodoByIdQuery } from "./queries";
 
-    return zero;
-  }),
-);
+const getTodoById = Effect.fn(function* (id: string) {
+  // Create the query instance
+  const query = yield* getTodoByIdQuery(id);
 
-// example query atom
-export const userAtom = Atom.make(
-  Effect.fn(function* (get) {
-    const zero = yield* get.result(zeroAtom);
-    const userId = yield* get.result(userIdAtom);
-    if (Option.isNone(userId)) {
-      return Option.none();
-    }
-    const query = zero.query.UserTable.where("id", "=", userId.value).one();
-    return yield* get.result(zeroClient.queryAtom(query)).pipe(Effect.map(Option.fromNullable));
-  }),
-);
-```
+  // For `createZero` implementation, see "Custom mutators" -> "Client setup"
+  const zero = yield* createZero({ ... });
 
-## Calling Mutations
+  // `Query.subscribe` creates an Effect's Subscribable from a query
+  yield* Query.subscribe(zero, query);
 
-With the `Zero` instance created using your unwrapped mutators, call them via `zero.mutate`:
-
-```ts
-export const deleteMessageAtom = Atom.fn(
-  Effect.fn(function* (messageId: MessageId) {
-    const zero = yield* Atom.getResult(zeroAtom);
-    yield* Effect.promise(() => zero.mutate.MessageTable.delete({ id: messageId }));
-  }),
-);
+  // You can also use the query with the Zero client as usual
+  const view = yield* Effect.sync(() => zero.materialize(query));
+});
 ```
 
 ## Differences from the original implementation

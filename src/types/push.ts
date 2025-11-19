@@ -1,10 +1,8 @@
 import * as Schema from "effect/Schema";
+import { JsonSchema } from "./common.js";
 
 // The code below was converted to Effect Schema from:
 // https://github.com/rocicorp/mono/blob/30f209f2946b4cf2cd2dee459849351498f11308/packages/zero-protocol/src/push.ts
-
-/** TODO: Defined as unknown for now */
-const JsonSchema = Schema.Unknown;
 
 const PrimaryKey = Schema.Array(Schema.String);
 

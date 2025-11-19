@@ -14,6 +14,7 @@ import { beforeEach } from "node:test";
 import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { NodeHttpServer } from "@effect/platform-node";
 import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
+import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -25,8 +26,8 @@ import * as Mutators from "effect-zero/mutators";
 import * as Query from "effect-zero/query";
 import * as Server from "effect-zero/server";
 import * as ServerTransaction from "effect-zero/server-transaction";
-import { PushBody, PushParams, PushResponse } from "effect-zero/types";
-import { prefixId } from "effect-zero/utils";
+import { PushBody, PushParams, PushResponse } from "effect-zero/types/push";
+import { TransformRequestMessage } from "effect-zero/types/queries";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
 import { WebSocket } from "undici";
@@ -109,9 +110,7 @@ const clientMutators = Mutators.make(mutatorSchema, {
 
 const serverMutators = Mutators.make(mutatorSchema, {
   messages: {
-    create: Effect.fn(function* (msg) {
-      yield* clientMutators.messages.create(msg).pipe(serverTransaction.execute);
-    }),
+    create: (msg) => clientMutators.messages.create(msg).pipe(serverTransaction.execute),
   },
   optionalVoidArg: Effect.fn(function* () {}),
   transformArgs: Effect.fn(function* (a) {
@@ -131,7 +130,7 @@ const serverMutators = Mutators.make(mutatorSchema, {
   throwsErrorAfterTransaction: Effect.fn(function* () {
     yield* serverTransaction
       .use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+        await tx.dbTransaction.wrappedTransaction.insert(messages).values({ id: nanoid(), body: "hello world" });
       })
       .pipe(serverTransaction.execute);
     throw new Error("error in throwsErrorAfterTransaction");
@@ -183,17 +182,54 @@ const serverMutators = Mutators.make(mutatorSchema, {
   }),
 });
 
+const builder = createBuilder(schema);
+
+const messageByIdQuery = Query.make({
+  name: "messageById",
+  payload: Schema.Tuple(Schema.String),
+  query: Effect.fn(function* (id) {
+    return yield* Effect.succeed(builder.messages.where("id", id).one());
+  }),
+});
+
+const messagesQuery = Query.make({
+  name: "messages",
+  payload: Schema.Tuple(),
+  query: Effect.fn(function* () {
+    // TODO: figure out why base queries (without `.limit()`) don't receive `completed` events
+    return yield* Effect.succeed(builder.messages.limit(100));
+  }),
+});
+
+const transformArgsQuerySpy = vi.fn();
+
+const transformArgsQuery = Query.make({
+  name: "transformArgs",
+  payload: Schema.Tuple(Schema.DateFromNumber),
+  query: Effect.fn(function* (a) {
+    expectTypeOf<typeof a>().toEqualTypeOf<Date>();
+    transformArgsQuerySpy(a);
+    return yield* Effect.succeed(builder.messages);
+  }),
+});
+
+const queries = [messageByIdQuery, messagesQuery, transformArgsQuery] satisfies Query.MakeQueryResult[];
+
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
-const waitForLastItem = Effect.fn("waitForLastItem")(<A, E, R>(stream: Stream.Stream<A, E, R>) => {
-  return pipe(
-    stream,
-    Stream.timeout(Duration.millis(100)),
-    Stream.runLast,
-    Effect.flatten,
-    Effect.catchTag("NoSuchElementException", () => Effect.fail(new Error("No items received from server"))),
-  );
-});
+const waitForLastItem = Effect.fn("waitForLastItem")(
+  <A, E, R>(stream: Stream.Stream<A, E, R>, timeout?: Duration.Duration) => {
+    return pipe(
+      stream,
+      Stream.timeout(timeout ?? Duration.millis(200)),
+      Stream.runLast,
+      Effect.map(
+        Effect.catchTag("NoSuchElementException", () => Effect.fail(new Error("No items received from server"))),
+      ),
+      Effect.flatten,
+    );
+  },
+);
 
 let responses = Chunk.empty<PushResponse>();
 
@@ -218,6 +254,21 @@ beforeAll(async () => {
         Effect.catchAll((e) =>
           Effect.gen(function* () {
             yield* Console.error("Push processor error:", e);
+            return HttpServerResponse.empty({ status: 500 });
+          }),
+        ),
+      ),
+    ),
+    HttpRouter.post(
+      "/get-queries",
+      Effect.gen(function* () {
+        const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
+        const response = yield* Server.handleGetQueries(queries, schema, payload);
+        return yield* HttpServerResponse.json(response);
+      }).pipe(
+        Effect.catchAllCause(
+          Effect.fn(function* (c) {
+            yield* Effect.logError("get-queries error:", c);
             return HttpServerResponse.empty({ status: 500 });
           }),
         ),
@@ -276,27 +327,6 @@ const initZero = Effect.gen(function* () {
   return z;
 });
 
-// const queryAtom = Atom.family(
-//   <T extends keyof (typeof schema)["tables"] & string, R>(query: ZeroQuery<typeof schema, T, R>) =>
-//     Atom.make((get) =>
-//       Effect.gen(function* () {
-//         const z = yield* get.result(zeroAtom);
-//         const sub = yield* Query.subscribe(z, query);
-//         return sub.changes;
-//       }).pipe((e) =>
-//         Stream.unwrap(
-//           e as Effect.Effect<
-//             Effect.Effect.Success<typeof e>,
-//             Effect.Effect.Error<typeof e>,
-//             // Pretend this effect doesn't have a scope requirement to make the type inference work as expected
-//             // TODO: ask Effect team to fix this
-//             Exclude<Effect.Effect.Context<typeof e>, Scope.Scope>
-//           >,
-//         ),
-//       ),
-//     ),
-// );
-
 test("server is running", async () => {
   const response = await fetch("http://localhost:3000/health");
   await expect(response.text()).resolves.toEqual("OK");
@@ -317,11 +347,11 @@ test("mutators should have correct argument types", () => {
 });
 
 test("mutator requirements should propagate", () => {
-  class DummyTag extends Effect.Service<DummyTag>()(prefixId("DummyTag"), {
+  class DummyTag extends Effect.Service<DummyTag>()("effect-zero/DummyTag", {
     succeed: {},
   }) {}
 
-  class DummyTag2 extends Effect.Service<DummyTag2>()(prefixId("DummyTag2"), {
+  class DummyTag2 extends Effect.Service<DummyTag2>()("effect-zero/DummyTag2", {
     succeed: {},
   }) {}
 
@@ -613,5 +643,68 @@ it.scopedLive(
     const z = yield* initZero;
 
     yield* Effect.promise(() => expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined());
+  }),
+);
+
+(process.env.GITHUB_ACTIONS ? it.scopedLive.fails : it.scopedLive)(
+  "synced queries should work",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const value: Message = { id: nanoid(), body: "Hello, world!" };
+    yield* Effect.promise(() => ddb.insert(messages).values(value));
+
+    const q = yield* messageByIdQuery(value.id);
+    const sub = yield* Query.subscribe(z, q);
+    const q2 = yield* messagesQuery();
+    const sub2 = yield* Query.subscribe(z, q2);
+
+    {
+      const result = yield* pipe(
+        sub.changes,
+        Stream.filter((d) => d.status === "complete"),
+        (s) => waitForLastItem(s, Duration.millis(500)),
+      );
+
+      expect(result.data).toEqual(value);
+    }
+
+    {
+      const result = yield* pipe(
+        sub2.changes,
+        Stream.filter((d) => d.status === "complete"),
+        (s) => waitForLastItem(s, Duration.millis(500)),
+      );
+
+      expect(result.data).toEqual([value]);
+    }
+
+    {
+      const value2: Message = { id: nanoid(), body: "Hello, world!" };
+      yield* Effect.promise(() => ddb.insert(messages).values(value2));
+
+      const result = yield* pipe(
+        sub2.changes,
+        Stream.filter((d) => d.status === "complete"),
+        (s) => waitForLastItem(s, Duration.millis(500)),
+      );
+
+      expect(result.data).toEqual(expect.arrayContaining([value, value2]));
+    }
+  }),
+  10000,
+);
+
+it.scopedLive(
+  "transformArgsQuery should accept and passthrough encoded non-JSON args",
+  Effect.fn(function* () {
+    expectTypeOf<Parameters<typeof transformArgsQuery>>().toEqualTypeOf<[Date]>();
+
+    const now = new Date();
+    const query = yield* transformArgsQuery(now);
+    const zero = yield* initZero;
+    yield* Effect.promise(() => zero.run(query));
+
+    expect(transformArgsQuerySpy).toHaveBeenCalledWith(now);
   }),
 );
