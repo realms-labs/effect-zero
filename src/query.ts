@@ -2,12 +2,12 @@ import type { HumanReadable, ReadonlyJSONValue, Zero, Query as ZeroQuery, Schema
 import type { QueryResult as ZeroQueryResult } from "@rocicorp/zero/react";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as Fn from "effect/Function";
 import * as Hash from "effect/Hash";
 import * as Match from "effect/Match";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import { prefixId } from "./internal/utils.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
@@ -71,8 +71,10 @@ export const make = <
     );
   });
 
+  // We return a callable object for ease of use on the frontend.
   return Object.assign((...args: B) => runQuery({ _tag: "Decoded", args }), {
     [QueryNameSymbol]: options.name,
+    // Internally, we include the full `runQuery` function for use in library's server logic.
     [RunQuerySymbol]: runQuery,
   });
 };
@@ -83,35 +85,48 @@ export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   typeof make<string, any, any, ZeroSchema, string, Record<string, any> | undefined, E, R1, R2>
 >;
 
-export const subscribe = Effect.fn(function* <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
+export const stream = <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
+  zero: Zero<S>,
+  // TODO: Look into why this is needed, instead of just `ZeroQuery<S, T, R>`
+  query: ZeroQuery<S, T, R> | Query<S, T, R>,
+) =>
+  Effect.gen(function* () {
+    const view = yield* Effect.acquireRelease(
+      Effect.sync(() => zero.materialize(query)),
+      (view) => Effect.sync(() => view.destroy()),
+    );
+
+    return Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
+      Effect.sync(() => view.addListener((...args) => emit.single(args))),
+    ).pipe(
+      Stream.mapEffect(([data, resultType]) =>
+        Effect.sync(() => {
+          // logic here borrowed from: https://github.com/rocicorp/mono/blob/288b00ec94f5a9ae6e988513423af25c281dbb2a/packages/zero-react/src/use-query.tsx#L295
+          // TODO: Look into why cast needs to be applied to whole ternary here, unlike source.
+          const cloned = (data === undefined ? data : deepClone(data as ReadonlyJSONValue)) as HumanReadable<R>;
+          return getSnapshot<R>(query.format.singular, cloned, resultType);
+        }),
+      ),
+      Stream.map(([data, { type: status }]) => ({
+        data,
+        status,
+      })),
+    );
+  }).pipe(Stream.unwrapScoped);
+
+export const initialValue = <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
+  query: ZeroQuery<S, T, R> | Query<S, T, R>,
+) =>
+  Fn.pipe(getDefaultSnapshot(query.format.singular) as ZeroQueryResult<R>, ([data, { type: status }]) => ({
+    data,
+    status,
+  }));
+
+export const subscribable = <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
   zero: Zero<S>,
   query: ZeroQuery<S, T, R> | Query<S, T, R>,
-) {
-  const view = yield* Effect.acquireRelease(
-    Effect.sync(() => zero.materialize(query)),
-    (view) => Effect.sync(() => view.destroy()),
-  );
-
-  const subscriptionRef = yield* SubscriptionRef.make<ZeroQueryResult<R>>(getDefaultSnapshot(query.format.singular));
-
-  yield* Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
-    Effect.sync(() => view.addListener((...args) => emit.single(args))),
-  ).pipe(
-    Stream.mapEffect(([data, resultType]) =>
-      Effect.sync(() => {
-        // logic here borrowed from: https://github.com/rocicorp/mono/blob/288b00ec94f5a9ae6e988513423af25c281dbb2a/packages/zero-react/src/use-query.tsx#L295
-        const cloned = (data === undefined ? data : deepClone(data as ReadonlyJSONValue)) as HumanReadable<R>;
-        return getSnapshot<R>(query.format.singular, cloned, resultType);
-      }),
-    ),
-    Stream.runForEach((snapshot) => SubscriptionRef.set(subscriptionRef, snapshot)),
-    Effect.forkScoped,
-  );
-
-  return subscriptionRef.pipe(
-    Subscribable.map(([data, { type: status }]) => ({
-      data,
-      status,
-    })),
-  );
-});
+) =>
+  Subscribable.make({
+    get: Effect.succeed(initialValue(query)),
+    changes: stream(zero, query),
+  });
