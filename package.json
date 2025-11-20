@@ -1,7 +1,7 @@
 {
   "name": "effect-zero",
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "MIT",
   "repository": {
     "url": "https://github.com/realms-labs/effect-zero"
