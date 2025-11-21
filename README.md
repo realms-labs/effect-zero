@@ -210,13 +210,57 @@ const getTodoById = Effect.fn(function* (id: string) {
   // For `createZero` implementation, see "Custom mutators" -> "Client setup"
   const zero = yield* createZero({ ... });
 
+// `Query.subscribe` creates an Effect's Stream from a query
+  const stream = Query.stream(zero, query);
+
   // `Query.subscribe` creates an Effect's Subscribable from a query
-  yield* Query.subscribe(zero, query);
+  const sub = Query.subscribable(zero, query);
 
   // You can also use the query with the Zero client as usual
   const view = yield* Effect.sync(() => zero.materialize(query));
 });
 ```
+
+### Usage with [effect-atom](https://github.com/tim-smart/effect-atom)
+
+You might want to create atoms with query results. To do that, you can implement a `queryAtom` helper like this:
+
+```ts
+import { Atom } from "@effect-atom/atom";
+import * as Effect from "effect/Effect";
+import * as Subscribable from "effect/Subscribable";
+import * as Query from "effect-zero/query";
+
+import type { schema } from "./schema"; // your schema
+import { zeroAtom } from "./zero"; // you can create zeroAtom using `createZero` from the "Client setup" section as a reference
+
+type Schema = typeof schema;
+
+export const queryAtom = Atom.family(
+  <T extends keyof Schema["tables"] & string, R>(query: Query.Query<Schema, T, R>) => {
+    return Atom.subscribable(
+      Effect.fn(function* (get) {
+        const zero = yield* get.result(zeroAtom);
+        return Query.subscribable(zero, query).pipe(Subscribable.map(({ data }) => data));
+      }),
+    );
+  },
+);
+```
+
+```ts
+// Usage
+
+import { Atom } from "@effect-atom/atom";
+
+const todoAtom = Atom.fn(Effect.fn(function* (id: string, get: Atom.FnContext) {
+  const query = yield* getTodoByIdQuery(id);
+  return yield* get.result(queryAtom(query));
+});
+```
+
+> [!NOTE]
+> Queries created via `Query.make` implement the [`Equal` trait](https://effect.website/docs/trait/equal/), so `Atom.query` would properly cache the results when using queries as arguments.
 
 ## Differences from the original implementation
 

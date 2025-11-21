@@ -18,7 +18,7 @@ import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { Chunk, Console, Duration, Effect, Layer, Option, pipe, Schema, type Scope, Stream } from "effect";
+import { Chunk, Console, Duration, Effect, Layer, Option, pipe, Schema, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
 import * as Client from "effect-zero/client";
 import * as ClientTransaction from "effect-zero/client-transaction";
@@ -231,6 +231,36 @@ const waitForLastItem = Effect.fn("waitForLastItem")(
   },
 );
 
+const initZero = Effect.gen(function* () {
+  const z = yield* Client.make(clientTransaction, clientMutators, {
+    userID: "anon",
+    server: "http://localhost:4848",
+    mutateURL: "http://localhost:3000/push",
+    onError,
+  });
+
+  const c = yield* Effect.promise(() =>
+    ddb
+      .select({ count: count() })
+      .from(messages)
+      .then((r) => r[0]!.count),
+  );
+  if (c > 0) {
+    yield* Effect.promise(() => rawDb`truncate table messages`);
+
+    // Wait until view is synced after truncation
+    const stream = Query.stream(z, z.query.messages);
+    yield* pipe(
+      stream,
+      Stream.filter((d) => d.status === "complete"),
+      waitForLastItem,
+      Effect.andThen((d) => Effect.fail(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
+    );
+  }
+
+  return z;
+});
+
 let responses = Chunk.empty<PushResponse>();
 
 beforeAll(async () => {
@@ -297,36 +327,6 @@ beforeEach(() => {
   responses = Chunk.empty<PushResponse>();
 });
 
-const initZero = Effect.gen(function* () {
-  const z = yield* Client.make(clientTransaction, clientMutators, {
-    userID: "anon",
-    server: "http://localhost:4848",
-    mutateURL: "http://localhost:3000/push",
-    onError,
-  });
-
-  const c = yield* Effect.promise(() =>
-    ddb
-      .select({ count: count() })
-      .from(messages)
-      .then((r) => r[0]!.count),
-  );
-  if (c > 0) {
-    yield* Effect.promise(() => rawDb`truncate table messages`);
-
-    // Wait until view is synced after truncation
-    const sub = yield* Query.subscribe(z, z.query.messages);
-    yield* pipe(
-      sub.changes,
-      Stream.filter((d) => d.status === "complete"),
-      waitForLastItem,
-      Effect.andThen((d) => Effect.fail(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
-    );
-  }
-
-  return z;
-});
-
 test("server is running", async () => {
   const response = await fetch("http://localhost:3000/health");
   await expect(response.text()).resolves.toEqual("OK");
@@ -386,13 +386,11 @@ it.scopedLive(
     };
     yield* Effect.promise(() => ddb.insert(messages).values(value1));
 
-    const subEffect = Query.subscribe(z, z.query.messages);
-    expectTypeOf<Effect.Effect.Context<typeof subEffect>>().toEqualTypeOf<Scope.Scope>();
-    const sub = yield* subEffect;
+    const stream = Query.stream(z, z.query.messages);
 
     {
       const result = yield* pipe(
-        sub.changes,
+        stream,
         Stream.filter((d) => d.status === "complete"),
         waitForLastItem,
       );
@@ -408,7 +406,7 @@ it.scopedLive(
 
     {
       const result = yield* pipe(
-        sub.changes,
+        stream,
         Stream.filter((d) => d.status === "complete"),
         waitForLastItem,
       );
@@ -655,13 +653,13 @@ it.scopedLive(
     yield* Effect.promise(() => ddb.insert(messages).values(value));
 
     const q = yield* messageByIdQuery(value.id);
-    const sub = yield* Query.subscribe(z, q);
+    const stream = Query.stream(z, q);
     const q2 = yield* messagesQuery();
-    const sub2 = yield* Query.subscribe(z, q2);
+    const stream2 = Query.stream(z, q2);
 
     {
       const result = yield* pipe(
-        sub.changes,
+        stream,
         Stream.filter((d) => d.status === "complete"),
         (s) => waitForLastItem(s, Duration.millis(500)),
       );
@@ -671,7 +669,7 @@ it.scopedLive(
 
     {
       const result = yield* pipe(
-        sub2.changes,
+        stream2,
         Stream.filter((d) => d.status === "complete"),
         (s) => waitForLastItem(s, Duration.millis(500)),
       );
@@ -684,7 +682,7 @@ it.scopedLive(
       yield* Effect.promise(() => ddb.insert(messages).values(value2));
 
       const result = yield* pipe(
-        sub2.changes,
+        stream2,
         Stream.filter((d) => d.status === "complete"),
         (s) => waitForLastItem(s, Duration.millis(500)),
       );
@@ -706,5 +704,56 @@ it.scopedLive(
     yield* Effect.promise(() => zero.run(query));
 
     expect(transformArgsQuerySpy).toHaveBeenCalledWith(now);
+  }),
+);
+
+it.scopedLive(
+  "Query.subscribable should work for singular queries",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const value: Message = { id: nanoid(), body: "Hello, world!" };
+    yield* Effect.promise(() => ddb.insert(messages).values(value));
+
+    const sub = Query.subscribable(z, z.query.messages.where("id", value.id).one());
+
+    expect(yield* sub.get).toEqual({ data: undefined, status: "unknown" });
+
+    {
+      const result = yield* pipe(
+        sub.changes,
+        Stream.filter((d) => d.status === "complete"),
+        waitForLastItem,
+      );
+
+      expect(result.data).toEqual(value);
+    }
+  }),
+);
+
+it.scopedLive(
+  "Query.subscribable should work for plural queries",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const values: Message[] = [
+      { id: nanoid(), body: "Hello, world!" },
+      { id: nanoid(), body: "Hello, world!" },
+    ];
+    yield* Effect.promise(() => ddb.insert(messages).values(values));
+
+    const sub = Query.subscribable(z, z.query.messages);
+
+    expect(yield* sub.get).toEqual({ data: [], status: "unknown" });
+
+    {
+      const result = yield* pipe(
+        sub.changes,
+        Stream.filter((d) => d.status === "complete"),
+        waitForLastItem,
+      );
+
+      expect(result.data).toEqual(expect.arrayContaining(values));
+    }
   }),
 );
