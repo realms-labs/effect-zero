@@ -45,7 +45,7 @@ import * as Server from "effect-zero/server";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import postgres from "postgres";
-import { clientTransaction } from "./client"; // see below
+import { clientTransaction, clientMutators } from "./client"; // see below
 import { mutatorSchema } from "./mutators";
 
 // zero schema (define or use something like drizzle-zero)
@@ -89,7 +89,8 @@ export const serverMutators = Mutators.make(mutatorSchema, {
       yield* Effect.log("after the transaction");
     }),
     toggle: Effect.fn(function* ({ id, done }) {
-      yield* serverTransaction.use((tx) => tx.mutate.TodoTable.update({ id, done })).pipe(serverTransaction.execute);
+      // You can also reuse client mutators on the server
+      yield* clientMutators.todo.toggle({ id, done }).pipe(serverTransaction.execute);
     }),
   },
 });
@@ -121,18 +122,16 @@ import * as Effect from "effect/Effect";
 import { schema } from "./schema"; // your schema
 import { mutatorSchema } from "./mutators"; // see below
 
-const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
-
 // The "client-side" transaction
-export const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
+const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
 
 export const clientMutators = Mutators.make(mutatorSchema, {
   todo: {
     create: Effect.fn(function* ({ id, title }) {
-      yield* zeroClient.Transaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
+      yield* clientTransaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
     }),
     toggle: Effect.fn(function* ({ id, done }) {
-      yield* zeroClient.Transaction.use((tx) => tx.mutate.TodoTable.update({ id, done }));
+      yield* clientTransaction.use((tx) => tx.mutate.TodoTable.update({ id, done }));
     }),
   },
 });
@@ -259,8 +258,7 @@ const todoAtom = Atom.fn(Effect.fn(function* (id: string, get: Atom.FnContext) {
 });
 ```
 
-> [!NOTE]
-> Queries created via `Query.make` implement the [`Equal` trait](https://effect.website/docs/trait/equal/), so `Atom.query` would properly cache the results when using queries as arguments.
+> **Note:** Queries created via `Query.make` implement the [`Equal` trait](https://effect.website/docs/trait/equal/), so `Atom.family` would properly cache the results when using queries as arguments.
 
 ## Differences from the original implementation
 
