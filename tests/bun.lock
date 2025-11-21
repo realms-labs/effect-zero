@@ -611,7 +611,7 @@
 
     "effect": ["effect@3.19.3", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-LodiPXiyUJWQ5LoMhUGbu0acD2ff5A5teJtUlLKDPVfoeWEBcZLlzK8BeVXpVa0f30UsdHouVCf0C/E0TxYMrA=="],
 
-    "effect-zero": ["effect-zero@../package.tgz", { "peerDependencies": { "@rocicorp/zero": "*", "effect": "3" } }],
+    "effect-zero": ["effect-zero@../package.tgz", { "peerDependencies": { "@effect-atom/atom": "*", "@rocicorp/zero": "*", "effect": "3" } }],
 
     "emoji-regex": ["emoji-regex@8.0.0", "", {}, "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="],
 

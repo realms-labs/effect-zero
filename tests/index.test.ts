@@ -20,12 +20,12 @@ import { count } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { Chunk, Console, Duration, Effect, Layer, Option, pipe, Schema, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
-import * as Client from "effect-zero/client";
-import * as ClientTransaction from "effect-zero/client-transaction";
-import * as Mutators from "effect-zero/mutators";
-import * as Query from "effect-zero/query";
-import * as Server from "effect-zero/server";
-import * as ServerTransaction from "effect-zero/server-transaction";
+import * as ZfxClient from "effect-zero/client";
+import * as ZfxClientTransaction from "effect-zero/client-transaction";
+import * as ZfxMutators from "effect-zero/mutators";
+import * as ZfxQuery from "effect-zero/query";
+import * as ZfxServer from "effect-zero/server";
+import * as ZfxServerTransaction from "effect-zero/server-transaction";
 import { PushBody, PushParams, PushResponse } from "effect-zero/types/push";
 import { TransformRequestMessage } from "effect-zero/types/queries";
 import { nanoid } from "nanoid";
@@ -41,7 +41,7 @@ const rawDb = postgres(process.env.ZERO_UPSTREAM_DB!, { onnotice: () => {} });
 const ddb = drizzle(rawDb);
 const database = zeroDrizzle(schema, ddb);
 
-const mutatorSchema = Mutators.schema({
+const mutatorSchema = ZfxMutators.schema({
   messages: {
     create: Schema.Struct({
       id: Schema.String,
@@ -64,8 +64,8 @@ const mutatorSchema = Mutators.schema({
   concurrentTransactions: Schema.Void,
 });
 
-const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
-const serverTransaction = ServerTransaction.make("ServerTransaction", database, clientTransaction);
+const clientTransaction = ZfxClientTransaction.make("ClientTransaction", schema);
+const serverTransaction = ZfxServerTransaction.make("ServerTransaction", database, clientTransaction);
 
 const transformArgsClient = vi.fn(
   Effect.fn(function* (a) {
@@ -81,7 +81,7 @@ const transformArgsServer = vi.fn(
   }),
 );
 
-const clientMutators = Mutators.make(mutatorSchema, {
+const clientMutators = ZfxMutators.make(mutatorSchema, {
   messages: {
     create: (msg) =>
       clientTransaction.use(async (tx) => {
@@ -108,7 +108,7 @@ const clientMutators = Mutators.make(mutatorSchema, {
   concurrentTransactions: Effect.fn(function* () {}),
 });
 
-const serverMutators = Mutators.make(mutatorSchema, {
+const serverMutators = ZfxMutators.make(mutatorSchema, {
   messages: {
     create: (msg) => clientMutators.messages.create(msg).pipe(serverTransaction.execute),
   },
@@ -184,7 +184,7 @@ const serverMutators = Mutators.make(mutatorSchema, {
 
 const builder = createBuilder(schema);
 
-const messageByIdQuery = Query.make({
+const messageByIdQuery = ZfxQuery.make({
   name: "messageById",
   payload: Schema.Tuple(Schema.String),
   query: Effect.fn(function* (id) {
@@ -192,7 +192,7 @@ const messageByIdQuery = Query.make({
   }),
 });
 
-const messagesQuery = Query.make({
+const messagesQuery = ZfxQuery.make({
   name: "messages",
   payload: Schema.Tuple(),
   query: Effect.fn(function* () {
@@ -203,7 +203,7 @@ const messagesQuery = Query.make({
 
 const transformArgsQuerySpy = vi.fn();
 
-const transformArgsQuery = Query.make({
+const transformArgsQuery = ZfxQuery.make({
   name: "transformArgs",
   payload: Schema.Tuple(Schema.DateFromNumber),
   query: Effect.fn(function* (a) {
@@ -213,7 +213,7 @@ const transformArgsQuery = Query.make({
   }),
 });
 
-const queries = [messageByIdQuery, messagesQuery, transformArgsQuery] satisfies Query.MakeQueryResult[];
+const queries = [messageByIdQuery, messagesQuery, transformArgsQuery] satisfies ZfxQuery.MakeQueryResult[];
 
 const onError = vi.fn((...args) => console.error("onError:", ...args));
 
@@ -232,7 +232,7 @@ const waitForLastItem = Effect.fn("waitForLastItem")(
 );
 
 const initZero = Effect.gen(function* () {
-  const z = yield* Client.make(clientTransaction, clientMutators, {
+  const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
     userID: "anon",
     server: "http://localhost:4848",
     mutateURL: "http://localhost:3000/push",
@@ -249,12 +249,12 @@ const initZero = Effect.gen(function* () {
     yield* Effect.promise(() => rawDb`truncate table messages`);
 
     // Wait until view is synced after truncation
-    const stream = Query.stream(z, z.query.messages);
+    const stream = ZfxQuery.stream(z, z.query.messages);
     yield* pipe(
       stream,
-      Stream.filter((d) => d.status === "complete"),
+      Stream.filter((d) => Predicate.isTagged(d, "Complete")),
       waitForLastItem,
-      Effect.andThen((d) => Effect.fail(new Error("not empty")).pipe(Effect.when(() => d.data.length > 0))),
+      Effect.andThen((d) => Effect.fail(new Error("not empty")).pipe(Effect.when(() => d.value.length > 0))),
     );
   }
 
@@ -270,7 +270,7 @@ beforeAll(async () => {
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(PushParams);
         const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
-        const result = yield* Server.processPush(serverTransaction, serverMutators, params, payload);
+        const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
         // yield* Effect.log("Push result:", result);
         const responseBody = yield* Schema.encode(PushResponse)(result);
 
@@ -293,7 +293,7 @@ beforeAll(async () => {
       "/get-queries",
       Effect.gen(function* () {
         const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-        const response = yield* Server.handleGetQueries(queries, schema, payload);
+        const response = yield* ZfxServer.handleGetQueries(queries, schema, payload);
         return yield* HttpServerResponse.json(response);
       }).pipe(
         Effect.catchAllCause(
@@ -333,7 +333,7 @@ test("server is running", async () => {
 });
 
 test("processPush has no extra requirements", () => {
-  const effect = Server.processPush(serverTransaction, serverMutators, {} as any, {} as any);
+  const effect = ZfxServer.processPush(serverTransaction, serverMutators, {} as any, {} as any);
 
   expectTypeOf<Effect.Effect.Context<typeof effect>>().toEqualTypeOf<never>();
 });
@@ -355,13 +355,13 @@ test("mutator requirements should propagate", () => {
     succeed: {},
   }) {}
 
-  const clientTransaction = ClientTransaction.make("DummyClientTransaction", schema);
-  const serverTransaction = ServerTransaction.make("DummyServerTransaction", database, clientTransaction);
-  const mutatorSchema = Mutators.schema({
+  const clientTransaction = ZfxClientTransaction.make("DummyClientTransaction", schema);
+  const serverTransaction = ZfxServerTransaction.make("DummyServerTransaction", database, clientTransaction);
+  const mutatorSchema = ZfxMutators.schema({
     dummy: Schema.Void,
     dummy2: Schema.Void,
   });
-  const mutators = Mutators.make(mutatorSchema, {
+  const mutators = ZfxMutators.make(mutatorSchema, {
     dummy: Effect.fn(function* () {
       yield* DummyTag;
     }),
@@ -369,7 +369,7 @@ test("mutator requirements should propagate", () => {
       yield* DummyTag2;
     }),
   });
-  const serverEffect = Server.processPush(serverTransaction, mutators, {} as any, {} as any);
+  const serverEffect = ZfxServer.processPush(serverTransaction, mutators, {} as any, {} as any);
 
   // expectTypeOf<Effect.Effect.Context<typeof clientEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
   expectTypeOf<Effect.Effect.Context<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
@@ -386,16 +386,16 @@ it.scopedLive(
     };
     yield* Effect.promise(() => ddb.insert(messages).values(value1));
 
-    const stream = Query.stream(z, z.query.messages);
+    const stream = ZfxQuery.stream(z, z.query.messages);
 
     {
       const result = yield* pipe(
         stream,
-        Stream.filter((d) => d.status === "complete"),
+        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
         waitForLastItem,
       );
 
-      expect(result.data).toEqual([value1]);
+      expect(result.value).toEqual([value1]);
     }
 
     const value2 = {
@@ -407,12 +407,12 @@ it.scopedLive(
     {
       const result = yield* pipe(
         stream,
-        Stream.filter((d) => d.status === "complete"),
+        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
         waitForLastItem,
       );
 
-      expect(result.data).toHaveLength(2);
-      expect(result.data).toEqual(expect.arrayContaining([value1, value2]));
+      expect(result.value).toHaveLength(2);
+      expect(result.value).toEqual(expect.arrayContaining([value1, value2]));
     }
   }),
 );
@@ -613,13 +613,13 @@ it.scopedLive(
 it.scopedLive(
   "non-existing mutator should reject",
   Effect.fn(function* () {
-    const mutatorSchema = Mutators.schema({
+    const mutatorSchema = ZfxMutators.schema({
       nonExistingMutator: Schema.Void,
     });
-    const clientMutators = Mutators.make(mutatorSchema, {
+    const clientMutators = ZfxMutators.make(mutatorSchema, {
       nonExistingMutator: Effect.fn(function* () {}),
     });
-    const z = yield* Client.make(clientTransaction, clientMutators, {
+    const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
       userID: "anon",
       server: "http://localhost:4848",
       mutateURL: "http://localhost:3000/push",
@@ -653,28 +653,28 @@ it.scopedLive(
     yield* Effect.promise(() => ddb.insert(messages).values(value));
 
     const q = yield* messageByIdQuery(value.id);
-    const stream = Query.stream(z, q);
+    const stream = ZfxQuery.stream(z, q);
     const q2 = yield* messagesQuery();
-    const stream2 = Query.stream(z, q2);
+    const stream2 = ZfxQuery.stream(z, q2);
 
     {
       const result = yield* pipe(
         stream,
-        Stream.filter((d) => d.status === "complete"),
+        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
         (s) => waitForLastItem(s, Duration.millis(500)),
       );
 
-      expect(result.data).toEqual(value);
+      expect(result.value).toEqual(value);
     }
 
     {
       const result = yield* pipe(
         stream2,
-        Stream.filter((d) => d.status === "complete"),
+        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
         (s) => waitForLastItem(s, Duration.millis(500)),
       );
 
-      expect(result.data).toEqual([value]);
+      expect(result.value).toEqual([value]);
     }
 
     {
@@ -683,11 +683,11 @@ it.scopedLive(
 
       const result = yield* pipe(
         stream2,
-        Stream.filter((d) => d.status === "complete"),
+        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
         (s) => waitForLastItem(s, Duration.millis(500)),
       );
 
-      expect(result.data).toEqual(expect.arrayContaining([value, value2]));
+      expect(result.value).toEqual(expect.arrayContaining([value, value2]));
     }
   }),
   10000,
@@ -715,18 +715,18 @@ it.scopedLive(
     const value: Message = { id: nanoid(), body: "Hello, world!" };
     yield* Effect.promise(() => ddb.insert(messages).values(value));
 
-    const sub = Query.subscribable(z, z.query.messages.where("id", value.id).one());
+    const sub = ZfxQuery.subscribable(z, z.query.messages.where("id", value.id).one());
 
-    expect(yield* sub.get).toEqual({ data: undefined, status: "unknown" });
+    expect(yield* sub.get).toEqual({ _tag: "Partial", value: undefined });
 
     {
       const result = yield* pipe(
         sub.changes,
-        Stream.filter((d) => d.status === "complete"),
+        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
         waitForLastItem,
       );
 
-      expect(result.data).toEqual(value);
+      expect(result.value).toEqual(value);
     }
   }),
 );
@@ -742,18 +742,18 @@ it.scopedLive(
     ];
     yield* Effect.promise(() => ddb.insert(messages).values(values));
 
-    const sub = Query.subscribable(z, z.query.messages);
+    const sub = ZfxQuery.subscribable(z, z.query.messages);
 
-    expect(yield* sub.get).toEqual({ data: [], status: "unknown" });
+    expect(yield* sub.get).toEqual({ _tag: "Partial", value: [] });
 
     {
       const result = yield* pipe(
         sub.changes,
-        Stream.filter((d) => d.status === "complete"),
+        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
         waitForLastItem,
       );
 
-      expect(result.data).toEqual(expect.arrayContaining(values));
+      expect(result.value).toEqual(expect.arrayContaining(values));
     }
   }),
 );
