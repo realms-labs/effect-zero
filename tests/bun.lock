@@ -5,7 +5,7 @@
     "": {
       "name": "tests",
       "dependencies": {
-        "@effect-atom/atom": "^0.4.0",
+        "@effect-atom/atom": "^0.4.3",
         "@effect/platform-node": "^0.100.0",
         "@effect/vitest": "^0.27.0",
         "@rocicorp/zero": "^0.24.3000000000",
@@ -51,7 +51,7 @@
 
     "@ecies/ciphers": ["@ecies/ciphers@0.2.4", "", { "peerDependencies": { "@noble/ciphers": "^1.0.0" } }, "sha512-t+iX+Wf5nRKyNzk8dviW3Ikb/280+aEJAnw9YXvCp2tYGPSkMki+NRY+8aNLmVFv3eNtMdvViPNOPxS8SZNP+w=="],
 
-    "@effect-atom/atom": ["@effect-atom/atom@0.4.0", "", { "peerDependencies": { "@effect/experimental": "^0.57.0", "@effect/platform": "^0.93.0", "@effect/rpc": "^0.72.1", "effect": "^3.19.0" } }, "sha512-iUr/C7HIAwwhrVjipbTtC+mWLQh1vjwwV2jQ1MdEaxully0yGa8cs3ZlvSoFH4UMGEQXYvOTkv0IKIabXi6Puw=="],
+    "@effect-atom/atom": ["@effect-atom/atom@0.4.3", "", { "peerDependencies": { "@effect/experimental": "^0.57.0", "@effect/platform": "^0.93.0", "@effect/rpc": "^0.72.1", "effect": "^3.19.0" } }, "sha512-0XOngJ+oDuJW7/Hgt09Kl8QunF1bGlEtV/K9hMB1MmQPUGb+ZtxfJwZkBeXjMPEL1Lgm04TDBlqB8+qgHz+y0w=="],
 
     "@effect/cluster": ["@effect/cluster@0.52.8", "", { "peerDependencies": { "@effect/platform": "^0.93.0", "@effect/rpc": "^0.72.1", "@effect/sql": "^0.48.0", "@effect/workflow": "^0.12.2", "effect": "^3.19.3" } }, "sha512-m0SrTwB38Btawy02PaAWg11rHJS2wwLFXUncmiMdyfYNTHkvRPK/Sg+EEzx5PsfU4xTGalfMRw/12P8l81gJNQ=="],
 
@@ -611,7 +611,7 @@
 
     "effect": ["effect@3.19.3", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-LodiPXiyUJWQ5LoMhUGbu0acD2ff5A5teJtUlLKDPVfoeWEBcZLlzK8BeVXpVa0f30UsdHouVCf0C/E0TxYMrA=="],
 
-    "effect-zero": ["effect-zero@../package.tgz", { "peerDependencies": { "@rocicorp/zero": "*", "effect": "3" } }],
+    "effect-zero": ["effect-zero@../package.tgz", { "peerDependencies": { "@effect-atom/atom": "*", "@rocicorp/zero": "*", "effect": "3" } }],
 
     "emoji-regex": ["emoji-regex@8.0.0", "", {}, "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="],
 

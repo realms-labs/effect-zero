@@ -1,13 +1,12 @@
 import type { HumanReadable, ReadonlyJSONValue, Zero, Query as ZeroQuery, Schema as ZeroSchema } from "@rocicorp/zero";
-import type { QueryResult as ZeroQueryResult } from "@rocicorp/zero/react";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
-import * as Fn from "effect/Function";
 import * as Hash from "effect/Hash";
 import * as Match from "effect/Match";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Subscribable from "effect/Subscribable";
+import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
@@ -107,26 +106,22 @@ export const stream = <S extends ZeroSchema, T extends keyof S["tables"] & strin
           return getSnapshot<R>(query.format.singular, cloned, resultType);
         }),
       ),
-      Stream.map(([data, { type: status }]) => ({
-        data,
-        status,
-      })),
+      Stream.map(QueryResult.make),
     );
   }).pipe(Stream.unwrapScoped);
 
 export const initialValue = <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
   query: ZeroQuery<S, T, R> | Query<S, T, R>,
-) =>
-  Fn.pipe(getDefaultSnapshot(query.format.singular) as ZeroQueryResult<R>, ([data, { type: status }]) => ({
-    data,
-    status,
-  }));
+) => QueryResult.make<R>(getDefaultSnapshot(query.format.singular));
 
 export const subscribable = <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
   zero: Zero<S>,
   query: ZeroQuery<S, T, R> | Query<S, T, R>,
-) =>
-  Subscribable.make({
-    get: Effect.succeed(initialValue(query)),
+) => {
+  return Subscribable.make({
+    get: Effect.promise(() => zero.run(query as ZeroQuery<S, T, R>, { type: "unknown" })).pipe(
+      Effect.map((value) => ({ _tag: "Partial", value }) satisfies QueryResult.QueryResult.Partial<R>),
+    ),
     changes: stream(zero, query),
   });
+};
