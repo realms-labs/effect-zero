@@ -1,7 +1,9 @@
 import { Result as AtomResult } from "@effect-atom/atom";
 import type { HumanReadable } from "@rocicorp/zero/react";
+import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Fn from "effect/Function";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Struct from "effect/Struct";
@@ -70,29 +72,17 @@ export class QueryError extends Data.TaggedError("QueryError")<{
   readonly details: QueryResult.Error["details"];
 }> {}
 
-/*
-TODO: remove this comment 
-
-Usage is something like:
-
-export const queryAtom = Atom.family(
-  <T extends keyof Schema["tables"] & string, R>(query: ZfxQuery.Query<Schema, T, R>) => {
-    return Atom.subscribable(
-      Effect.fn(function* (get) {
-        const zero = yield* get.result(zeroAtom);
-        return ZfxQuery.subscribable(zero, query);
+export const make = <A, E>(value: AtomResult.Result<QueryResult<A>, E>): Result<A, E> =>
+  Match.valueTags(value, {
+    Initial: () => AtomResult.initial(),
+    Success: ({ value }) =>
+      Match.valueTags(value, {
+        Partial: (value) => AtomResult.success(value),
+        Complete: (value) => AtomResult.success(value),
+        Error: (e) => AtomResult.failure(Cause.fail(new QueryError(e))),
       }),
-    ).pipe(
-      Atom.map(ZfxResult.make),
-      Atom.map(ZfxResult.acceptPartialMode("waitForServer"))
-    );
-  },
-);
-*/
-
-export const make = <A, E>(value: AtomResult.Result<QueryResult<A>, E>): Result<A, E> => {
-  // TODO: implement this.
-};
+    Failure: (e) => AtomResult.failure(e.cause),
+  });
 
 // based on: https://github.com/tim-smart/effect-atom/blob/04c15cacda42dd230782f52c0e978400793a502c/packages/atom/src/Result.ts#L424
 export const match: {
@@ -121,22 +111,16 @@ export const match: {
       readonly onPartial: (_: QueryResult.Partial<A>) => Y;
       readonly onComplete: (_: QueryResult.Complete<A>) => Z;
     },
-  ) => {
-    switch (self._tag) {
-      case "Initial":
-        return options.onInitial(self);
-      case "Failure":
-        return options.onFailure(self);
-      case "Success": {
-        switch (self.value._tag) {
-          case "Partial":
-            return options.onPartial(self.value);
-          case "Complete":
-            return options.onComplete(self.value);
-        }
-      }
-    }
-  },
+  ) =>
+    Match.valueTags(self, {
+      Initial: (initial) => options.onInitial(initial),
+      Failure: (failure) => options.onFailure(failure),
+      Success: (success) =>
+        Match.valueTags(success.value, {
+          Partial: (partial) => options.onPartial(partial),
+          Complete: (complete) => options.onComplete(complete),
+        }),
+    }),
 );
 
 export const mapSuccess: {
@@ -144,7 +128,23 @@ export const mapSuccess: {
   <A, B, E = never>(self: AtomResult.Success<A, E>, f: (value: A) => B): AtomResult.Success<B, E>;
 } = Fn.dual(2, <A, B, E = never>(self: AtomResult.Success<A, E>, f: (value: A) => B) => AtomResult.map(self, f));
 
-export const acceptPartialWith = <A, E = never>(self: Result<A, E>, predicate: (value: HumanReadable<A>) => boolean) =>
+export const acceptPartialWith: {
+  <A, E = never>(
+    self: Result<A, E>,
+    predicate: (value: HumanReadable<A>) => boolean,
+  ):
+    | AtomResult.Initial<HumanReadable<A>, E>
+    | AtomResult.Success<HumanReadable<A>, QueryError | E>
+    | AtomResult.Failure<HumanReadable<A>, QueryError | E>;
+  <A, E = never>(
+    self: Result<A, E>,
+  ): (
+    predicate: (value: HumanReadable<A>) => boolean,
+  ) =>
+    | AtomResult.Initial<HumanReadable<A>, E>
+    | AtomResult.Success<HumanReadable<A>, QueryError | E>
+    | AtomResult.Failure<HumanReadable<A>, QueryError | E>;
+} = Fn.dual(2, <A, E = never>(self: Result<A, E>, predicate: (value: HumanReadable<A>) => boolean) =>
   AtomResult.match(self, {
     onSuccess: (success) =>
       Predicate.isTagged(success.value, "Partial") && !predicate(success.value.value)
@@ -162,8 +162,51 @@ export const acceptPartialWith = <A, E = never>(self: Result<A, E>, predicate: (
         ),
       }),
     onInitial: (initial) => AtomResult.initial<HumanReadable<A>, E>(initial.waiting),
-  });
+  }),
+);
 
-const acceptPartialMode = <A, E>(self: Result<A, E>, mode: any) => {
-  // TODO: implement this.
-};
+export type AcceptPartialMode = "waitForServer" | "acceptCached";
+
+export const acceptPartialMode: {
+  <A, E>(
+    self: Result<A, E>,
+    /**
+     * - `acceptCached` -> Will resolve to the partial result if it is available
+     *   - For singular queries, it will resolve if the cached value exists.
+     *   - For list queries, it will resolve to the cached value regardless of the length of the list.
+     *   - It will update the returned value as additional rows come in, and then optionally settle on a final value.
+     *
+     * - `waitForServer` -> Will wait for the complete result (from the server) before resolving
+     *   - When you want to wait for the server before doing something.
+     *   - Only used for queries in which you need an fully accurate result before doing something.
+     **/
+    mode: AcceptPartialMode,
+  ):
+    | AtomResult.Initial<HumanReadable<A>, E>
+    | AtomResult.Success<HumanReadable<A>, QueryError | E>
+    | AtomResult.Failure<HumanReadable<A>, QueryError | E>;
+  <A, E>(
+    /**
+     * - `acceptCached` -> Will resolve to the partial result if it is available
+     *   - For singular queries, it will resolve if the cached value exists.
+     *   - For list queries, it will resolve to the cached value regardless of the length of the list.
+     *   - It will update the returned value as additional rows come in, and then optionally settle on a final value.
+     *
+     * - `waitForServer` -> Will wait for the complete result (from the server) before resolving
+     *   - When you want to wait for the server before doing something.
+     *   - Only used for queries in which you need an fully accurate result before doing something.
+     **/
+    mode: AcceptPartialMode,
+  ): (
+    self: Result<A, E>,
+  ) =>
+    | AtomResult.Initial<HumanReadable<A>, E>
+    | AtomResult.Success<HumanReadable<A>, QueryError | E>
+    | AtomResult.Failure<HumanReadable<A>, QueryError | E>;
+} = Fn.dual(2, <A, E>(self: Result<A, E>, mode: AcceptPartialMode) =>
+  Match.value(mode).pipe(
+    Match.when("waitForServer", () => acceptPartialWith(self, () => false)),
+    Match.when("acceptCached", () => acceptPartialWith(self, (v) => v !== undefined)),
+    Match.exhaustive,
+  ),
+);
