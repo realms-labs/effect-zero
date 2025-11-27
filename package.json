@@ -32,5 +32,8 @@
   },
   "patchedDependencies": {
     "typescript@5.9.2": "patches/typescript@5.9.2.patch"
+  },
+  "dependencies": {
+    "@effect-atom/atom": "^0.4.3"
   }
 }
