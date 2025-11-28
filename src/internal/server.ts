@@ -38,20 +38,26 @@ export class ServerSynchronizationContext extends Effect.Service<ServerSynchroni
 
   static finalize = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.gen(this, function* () {
-      const wasTransactionExecuted = yield* this.pipe(Effect.flatMap((ctx) => ctx.wasTransactionExecuted));
+      const wasTransactionExecuted = yield* this.pipe(Effect.map((ctx) => ctx.wasTransactionExecuted));
 
       return yield* effect.pipe(
         // Case #2 "One transaction then fail"
         // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
-        Effect.catchAllCause((e) => {
-          if (wasTransactionExecuted) {
-            return Effect.logError("Error occurred after transaction execution completed", e);
-          }
-          return Effect.failCause(e);
-        }),
+        Effect.catchAllCause(
+          Effect.fn(function* (e) {
+            if (yield* wasTransactionExecuted) {
+              return yield* Effect.logError("Error occurred after transaction execution completed", e);
+            }
+            return yield* Effect.failCause(e);
+          }),
+        ),
         // Case #4 "Zero transactions then succeed"
         // Check that the transaction was executed during the mutation
-        Effect.tap(!wasTransactionExecuted ? new NoTransactionError() : Effect.void),
+        Effect.tap(
+          Effect.gen(function* () {
+            return !(yield* wasTransactionExecuted) ? yield* new NoTransactionError() : yield* Effect.void;
+          }),
+        ),
       );
     });
 }
