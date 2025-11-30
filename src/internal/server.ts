@@ -55,7 +55,9 @@ export class ServerSynchronizationContext extends Effect.Service<ServerSynchroni
         // Check that the transaction was executed during the mutation
         Effect.tap(
           Effect.gen(function* () {
-            return !(yield* wasTransactionExecuted) ? yield* new NoTransactionError() : yield* Effect.void;
+            if (!(yield* wasTransactionExecuted)) {
+              return yield* new NoTransactionError();
+            }
           }),
         ),
       );
