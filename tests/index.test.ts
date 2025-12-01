@@ -273,7 +273,6 @@ beforeAll(async () => {
         const params = yield* HttpRouter.schemaParams(PushParams);
         const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
         const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
-        // yield* Effect.log("Push result:", result);
         const responseBody = yield* Schema.encode(PushResponse)(result);
 
         responses = Chunk.append(responses, responseBody);
@@ -373,7 +372,6 @@ test("mutator requirements should propagate", () => {
   });
   const serverEffect = ZfxServer.processPush(serverTransaction, mutators, {} as any, {} as any);
 
-  // expectTypeOf<Effect.Effect.Context<typeof clientEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
   expectTypeOf<Effect.Effect.Context<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
 
@@ -425,7 +423,10 @@ it.scopedLive(
     const z = yield* initZero;
 
     const item: Message = { id: nanoid(), body: "Hello, world!" };
-    yield* Effect.promise(() => z.mutate.messages.create(item).server);
+    yield* Effect.promise(async () => {
+      const mut = z.mutate.messages.create(item);
+      await Promise.all([mut.client, mut.server]);
+    });
 
     const result = yield* Effect.promise(() => rawDb`select id, body from messages`);
     expect(result.slice()).toEqual([item]);
@@ -565,16 +566,19 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.tryPromise({
-      try: async () => {
-        const mut = z.mutate.noTransaction();
-        await mut.server.catch(Effect.fail);
-      },
-      catch: (e) =>
-        expect(e).toEqual({
-          error: "app",
-          details: "No transaction detected in a mutation, a transaction is required.",
+    yield* Effect.promise(async () => {
+      const mut = z.mutate.noTransaction();
+      let promiseResolved = false;
+      await expect(
+        Promise.all([mut.client, mut.server]).then(() => {
+          promiseResolved = true;
         }),
+      ).rejects.toEqual({
+        error: "app",
+        details: "No transaction detected in a mutation, a transaction is required.",
+      });
+
+      expect(promiseResolved).toBe(false);
     });
   }),
 );

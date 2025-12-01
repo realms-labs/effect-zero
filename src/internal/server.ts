@@ -64,7 +64,9 @@ export class ServerSynchronizationContext extends Effect.Service<ServerSynchroni
     });
 }
 
-export class NoTransactionError extends Data.TaggedError("NoTransactionError") {}
+export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
+  message = "No transaction detected in a mutation, a transaction is required.";
+}
 export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {}
 
 const OutOfOrderMutationErrorTypeId = Symbol.for(prefixId("OutOfOrderMutationError"));
