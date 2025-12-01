@@ -27,4 +27,9 @@ export const make = <const Id extends string, TSchema extends ZeroSchema>(id: Id
 
 class ClientTransactionError extends Data.TaggedError("ClientTransactionError")<{
   readonly cause: Cause.Cause<unknown>;
-}> {}
+}> {
+  override get message() {
+    const err = Cause.squash(this.cause);
+    return err instanceof Error ? err.message : "exception was not of type `Error`";
+  }
+}

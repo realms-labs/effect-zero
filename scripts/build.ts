@@ -8,6 +8,7 @@ const tsOutDir = "dist";
 
 await fs.rm(outDir, { recursive: true, force: true });
 await fs.rm(tsOutDir, { recursive: true, force: true });
+await $`bun run test`;
 await $`bun tsc`;
 
 // This is required to have correct paths in declaration source maps
