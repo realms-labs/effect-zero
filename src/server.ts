@@ -54,8 +54,7 @@ export const processPush = Effect.fn(function* <
         if (mutation.type !== "custom") {
           return yield* new CustomMutationExpectedError();
         }
-        // Provide a fresh ServerSynchronizationContext for each mutation
-        // so that each mutation can have its own transaction
+
         return yield* processMutation<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
           Effect.catchAll((e) => processMutationError(transaction, e)),
           Effect.map((result) =>
