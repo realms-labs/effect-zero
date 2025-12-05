@@ -54,6 +54,8 @@ export const processPush = Effect.fn(function* <
         if (mutation.type !== "custom") {
           return yield* new CustomMutationExpectedError();
         }
+        // Provide a fresh ServerSynchronizationContext for each mutation
+        // so that each mutation can have its own transaction
         return yield* processMutation<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
           Effect.catchAll((e) => processMutationError(transaction, e)),
           Effect.map((result) =>
@@ -65,6 +67,7 @@ export const processPush = Effect.fn(function* <
             clientGroupID: request.clientGroupID,
             upstreamSchema: params.schema,
           }),
+          Effect.provide(ServerSynchronizationContext.Default),
         );
       }),
     ),
@@ -76,7 +79,7 @@ export const processPush = Effect.fn(function* <
   );
 
   return { mutations: Chunk.toArray(responses) } satisfies Types.PushResponse;
-}, Effect.provide(ServerSynchronizationContext.Default));
+});
 
 const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Types.Mutation) {
   // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
