@@ -64,6 +64,8 @@ const mutatorSchema = ZfxMutators.schema({
   noTransaction: Schema.Void,
   doubleTransaction: Schema.Void,
   concurrentTransactions: Schema.Void,
+  batchedMutation1: Schema.Struct({ id: Schema.String }),
+  batchedMutation2: Schema.Struct({ id: Schema.String }),
 });
 
 const clientTransaction = ZfxClientTransaction.make("ClientTransaction", schema);
@@ -108,6 +110,8 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   noTransaction: Effect.fn(function* () {}),
   doubleTransaction: Effect.fn(function* () {}),
   concurrentTransactions: Effect.fn(function* () {}),
+  batchedMutation1: Effect.fn(function* () {}),
+  batchedMutation2: Effect.fn(function* () {}),
 });
 
 const serverMutators = ZfxMutators.make(mutatorSchema, {
@@ -181,6 +185,20 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
       ],
       { concurrency: "unbounded" },
     );
+  }),
+  batchedMutation1: Effect.fn(function* (args) {
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.mutate.messages.insert({ id: args.id, body: "batchedMutation1" });
+      })
+      .pipe(serverTransaction.execute);
+  }),
+  batchedMutation2: Effect.fn(function* (args) {
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.mutate.messages.insert({ id: args.id, body: "batchedMutation2" });
+      })
+      .pipe(serverTransaction.execute);
   }),
 });
 
@@ -974,4 +992,44 @@ it.scopedLive(
       ]);
     }
   }, Effect.provide(Registry.layer)),
+);
+
+it.scopedLive(
+  "multiple mutations batched in a single push should all succeed",
+  Effect.fn(function* () {
+    const id1 = nanoid();
+    const id2 = nanoid();
+
+    const pushBody = {
+      pushVersion: 1,
+      clientGroupID: `cg-${nanoid()}`,
+      mutations: [
+        { type: "custom", id: 1, clientID: "test-client", name: "batchedMutation1", args: [{ id: id1 }], timestamp: 0 },
+        { type: "custom", id: 2, clientID: "test-client", name: "batchedMutation2", args: [{ id: id2 }], timestamp: 0 },
+      ],
+      requestID: nanoid(),
+      timestamp: Date.now(),
+    };
+
+    const response = yield* Effect.tryPromise(() =>
+      fetch("http://localhost:3000/push?schema=test&appID=test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pushBody),
+      }).then((r) => r.json()),
+    );
+
+    expect(response).toHaveProperty("mutations");
+    expect(response.mutations).toHaveLength(2);
+    expect(response.mutations[0].result).not.toHaveProperty("error");
+    expect(response.mutations[1].result).not.toHaveProperty("error");
+
+    const rows = yield* Effect.promise(
+      () => rawDb`select id, body from messages where id in (${id1}, ${id2}) order by body`,
+    );
+    expect(rows.slice()).toEqual([
+      { id: id1, body: "batchedMutation1" },
+      { id: id2, body: "batchedMutation2" },
+    ]);
+  }),
 );
