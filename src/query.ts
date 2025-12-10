@@ -56,9 +56,8 @@ export const make = <
           // is sent to the server.
           encoded,
         ) as Query<S, T, R>;
-        query[Hash.symbol] = function () {
-          return Hash.hash(this.hash());
-        };
+        // Adapted from https://github.com/rocicorp/mono/blob/17171f975e61f7ec93c61569da7bda1d962ac962/packages/zero-protocol/src/query-hash.ts#L17
+        query[Hash.symbol] = () => Hash.string(`${options.name}:${JSON.stringify(encoded)}`);
         query[Equal.symbol] = function (that) {
           if (Hash.isHash(that)) {
             return Equal.equals(this[Hash.symbol](), that[Hash.symbol]());
