@@ -16,7 +16,7 @@ await fs.move(tsOutDir, path.join(outDir, tsOutDir));
 
 const packageJson = await Bun.file("package.json").json();
 const version = packageJson.version as string;
-const filePaths = await fg(["src/**/*.ts", "!src/internal"]);
+const filePaths = await fg(["src/**/*.ts", "!src/internal", "!**/*.test.ts"]);
 const exports: Record<string, { import: { types: string; default: string } }> = {};
 for await (const filePath of filePaths) {
   const relPath = path.relative("src", filePath);
@@ -31,6 +31,7 @@ await Promise.all([
   Bun.write(path.join(outDir, "package.json"), JSON.stringify(packageJson, null, 2)),
   fs.copyFile("README.md", path.join(outDir, "README.md")),
   fs.copyFile("LICENSE", path.join(outDir, "LICENSE")),
+  fs.copyFile(".npmignore", path.join(outDir, ".npmignore")),
   fs.copy("src", path.join(outDir, "src")),
 ]);
 
