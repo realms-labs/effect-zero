@@ -18,11 +18,17 @@ export type AnyMutatorFns<R = any> = {
 export type AnyMutatorSchema = Schema.Schema<any, any, never>;
 export type AnyMutatorSchemas = Record<string, AnyMutatorSchema | Record<string, AnyMutatorSchema>>;
 
+// Helper type to compute mutator function args from schema
+// For void schemas, we accept either no args or optional void arg
+type MutatorArgs<T extends AnyMutatorSchema> = Schema.Schema.Type<T> extends void
+  ? [] | [(void | undefined)?]
+  : [Schema.Schema.Type<T>];
+
 export type MutatorFns<TSchema extends AnyMutatorSchemas> = {
   [K in keyof TSchema]: TSchema[K] extends AnyMutatorSchema
-    ? AnyMutatorFn<unknown, [Schema.Schema.Type<TSchema[K]>]>
+    ? AnyMutatorFn<unknown, MutatorArgs<TSchema[K]>>
     : TSchema[K] extends infer TSchema extends Record<string, AnyMutatorSchema>
-      ? { [K in keyof TSchema]: AnyMutatorFn<unknown, [Schema.Schema.Type<TSchema[K]>]> }
+      ? { [K in keyof TSchema]: AnyMutatorFn<unknown, MutatorArgs<TSchema[K]>> }
       : never;
 };
 

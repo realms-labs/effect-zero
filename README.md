@@ -41,6 +41,7 @@ export const mutatorSchema = Mutators.schema({
 import { zeroPostgresJS } from "@rocicorp/zero/server/adapters/postgresjs";
 import { PushResponse, PushParams, PushBody } from "effect-zero/types/push";
 import * as ServerTransaction from "effect-zero/server-transaction";
+import * as Mutators from "effect-zero/mutators";
 import * as Server from "effect-zero/server";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
@@ -69,7 +70,7 @@ const serverTransaction = ServerTransaction.make(
 // define server mutators
 export const serverMutators = Mutators.make(mutatorSchema, {
   todo: {
-    create: ({ id, title }) => Effect.gen(function* () {
+    create: Effect.fn(function* ({ id, title }) {
       // Note, we can run arbitrary logic before/after performing the zero transaction
       // this is a unique feature which is not supported by the default zero push processor implementation
       // shipped with the base `@rocicorp/zero` package
@@ -77,7 +78,7 @@ export const serverMutators = Mutators.make(mutatorSchema, {
       // before the transaction
       yield* Effect.log("before the transaction");
 
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         // during the transaction
         yield* Effect.log("during the transaction");
         yield* serverTransaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
@@ -116,14 +117,15 @@ export async function handleZeroPush(req: Request): Promise<Response> {
 
 ```ts
 // client.ts
-import { Zero } from "@rocicorp/zero";
+import * as Client from "effect-zero/client";
 import * as ClientTransaction from "effect-zero/client-transaction";
+import * as Mutators from "effect-zero/mutators";
 import * as Effect from "effect/Effect";
 import { schema } from "./schema"; // your schema
-import { mutatorSchema } from "./mutators"; // see below
+import { mutatorSchema } from "./mutators"; // see above
 
 // The "client-side" transaction
-const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
+export const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
 
 export const clientMutators = Mutators.make(mutatorSchema, {
   todo: {
@@ -137,12 +139,14 @@ export const clientMutators = Mutators.make(mutatorSchema, {
 });
 
 // Helper to create a vanilla Zero client instance for querying and mutating
-export const createZero = Effect.fn(function* (opts: { userID: string; auth?: string; server: string }) {
+export const createZero = Effect.fn(function* (opts: { userID: string; auth?: string; server: string; mutateURL: string }) {
   // `Client.make` returns an Effect containing a Zero client instance
+  // Note: this is a scoped effect, so it must be run within a scope (e.g., Effect.scoped)
   return yield* Client.make(clientTransaction, clientMutators, {
     userID: opts.userID,
     auth: opts.auth,
-    server: opts.server, // your push/pull endpoint base URL
+    server: opts.server, // your zero-cache server URL
+    mutateURL: opts.mutateURL, // your push endpoint URL
     kvStore: "idb", // or "mem" for in-memory
     // "mutators" and "schema" are inferred from other arguments, so we don't need to pass them here
   });
@@ -157,12 +161,14 @@ export const createZero = Effect.fn(function* (opts: { userID: string; auth?: st
 
 import { createBuilder } from "@rocicorp/zero";
 import * as Query from "effect-zero/query";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { schema } from "./schema"; // your schema
 
 const builder = createBuilder(schema);
 
 export const getTodoByIdQuery = Query.make({
-  name: "listTodos",
+  name: "getTodoById",
   payload: Schema.Tuple(Schema.String),
   query: Effect.fn(function* (id) {
     return yield* Effect.succeed(builder.todos.where("id", id).one());
@@ -184,11 +190,12 @@ import { TransformRequestMessage } from "effect-zero/types/queries";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { queries } from "./queries";
+import { schema } from "./schema"; // your schema
 
 // See `handleZeroPush` notes
-export async function handleZeroGetQueries(req: Request): Promise<Response> {
+export async function handleZeroQueryRequest(req: Request): Promise<Response> {
   const payload = Schema.decodeSync(TransformRequestMessage)(await req.json());
-  const result = await Effect.runPromise(Server.handleGetQueries(queries, schema, payload));
+  const result = await Effect.runPromise(Server.handleQueryRequest(queries, schema, payload));
   return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
 }
 ```
@@ -201,18 +208,18 @@ export async function handleZeroGetQueries(req: Request): Promise<Response> {
 import * as Effect from 'effect/Effect';
 import * as Query from "effect-zero/query";
 import { getTodoByIdQuery } from "./queries";
+import { createZero } from "./client"; // see "Custom mutators" -> "Client setup"
 
 const getTodoById = Effect.fn(function* (id: string) {
   // Create the query instance
   const query = yield* getTodoByIdQuery(id);
 
-  // For `createZero` implementation, see "Custom mutators" -> "Client setup"
-  const zero = yield* createZero({ ... });
+  const zero = yield* createZero({ userID: "anon", server: "http://localhost:4848" });
 
-// `Query.subscribe` creates an Effect's Stream from a query
+  // `Query.stream` creates an Effect's Stream from a query
   const stream = Query.stream(zero, query);
 
-  // `Query.subscribe` creates an Effect's Subscribable from a query
+  // `Query.subscribable` creates an Effect's Subscribable from a query
   const sub = Query.subscribable(zero, query);
 
   // You can also use the query with the Zero client as usual
@@ -236,11 +243,11 @@ import { zeroAtom } from "./zero"; // you can create zeroAtom using `createZero`
 type Schema = typeof schema;
 
 export const queryAtom = Atom.family(
-  <T extends keyof Schema["tables"] & string, R>(query: Query.Query<Schema, T, R>) => {
+  <T extends keyof Schema["tables"] & string, R>(query: Query.Query<T, Schema, R>) => {
     return Atom.subscribable(
       Effect.fn(function* (get) {
         const zero = yield* get.result(zeroAtom);
-        return Query.subscribable(zero, query).pipe(Subscribable.map(({ data }) => data));
+        return Query.subscribable(zero, query).pipe(Subscribable.map(({ value }) => value));
       }),
     );
   },

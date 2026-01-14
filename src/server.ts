@@ -1,5 +1,5 @@
-import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
-import { handleGetQueriesRequest } from "@rocicorp/zero/server";
+import type { AnyQuery, ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
+import { handleQueryRequest as handleQueryRequestZero } from "@rocicorp/zero/server";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Chunk from "effect/Chunk";
@@ -179,7 +179,15 @@ class MutationUserError extends Data.TaggedError("MutationUserError")<{
   }
 }
 
-export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
+/**
+ * Handles query transform requests from Zero Cache.
+ * This function processes custom/named queries and returns the transformed AST.
+ *
+ * @param queries - Array of query definitions created with `ZfxQuery.make`
+ * @param schema - The Zero schema
+ * @param payload - The transform request message from Zero Cache
+ */
+export const handleQueryRequest = Effect.fn(function* <E, R1, R2>(
   queries: MakeQueryResult<E, R1, R2>[],
   schema: ZeroSchema,
   payload: TransformRequestMessage,
@@ -187,27 +195,26 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   const runtime = yield* Effect.runtime<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
-      handleGetQueriesRequest(
-        (name, args) =>
-          Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
+      handleQueryRequestZero(
+        (name, args) => {
+          const query = Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
             Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ name })),
-            Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
-            Effect.map((query) => ({ query })),
-            (effect) => Runtime.runPromiseExit(runtime, effect),
-            (exit) =>
-              exit.then(
-                Exit.getOrElse((cause) => {
-                  throw new QueryUserError<E>({ cause });
-                }),
-              ),
-          ),
+            Effect.flatMap((query) =>
+              query[RunQuerySymbol]({ _tag: "Encoded", args: (args ?? []) as ReadonlyJSONValue[] }),
+            ),
+          );
+          const exit = Runtime.runSyncExit(runtime)(query);
+          return Exit.getOrElse(exit, (cause) => {
+            throw new QueryUserError<E>({ cause });
+          }) as unknown as AnyQuery;
+        },
         schema,
         payload as ReadonlyJSONValue,
       ),
     catch: (e) =>
       Option.liftPredicate(e, QueryUserError.is<E>).pipe(
         Option.flatMap((e) => Cause.failureOption(e.cause)),
-        Option.getOrElse(() => new GetQueriesError({ cause: Cause.fail(e) })),
+        Option.getOrElse(() => new QueryRequestError({ cause: Cause.fail(e) })),
       ),
   });
 });
@@ -228,4 +235,7 @@ class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{
   }
 }
 
-class GetQueriesError extends Data.TaggedError("GetQueriesError")<{ cause: Cause.Cause<unknown> }> {}
+/**
+ * Error thrown when query request processing fails.
+ */
+class QueryRequestError extends Data.TaggedError("QueryRequestError")<{ cause: Cause.Cause<unknown> }> {}
