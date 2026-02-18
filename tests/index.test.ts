@@ -996,7 +996,7 @@ it.scopedLive(
   }, Effect.provide(Registry.layer)),
 );
 
-it.scopedLive.only(
+it.scopedLive(
   "multiple mutations batched in a single push should all succeed",
   Effect.fn(function* () {
     const ids1 = Array.from({ length: 10 }, () => nanoid());
