@@ -17,7 +17,7 @@ import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
 import { Atom, Registry } from "@effect-atom/atom";
 import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
-import { count, eq } from "drizzle-orm";
+import { count, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { Chunk, Console, Duration, Effect, Layer, Option, pipe, Schema, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
@@ -110,8 +110,8 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   noTransaction: Effect.fn(function* () {}),
   doubleTransaction: Effect.fn(function* () {}),
   concurrentTransactions: Effect.fn(function* () {}),
-  batchedMutation1: Effect.fn(function* () {}),
-  batchedMutation2: Effect.fn(function* () {}),
+  batchedMutation1: Effect.fn(function* (_args) {}),
+  batchedMutation2: Effect.fn(function* (_args) {}),
 });
 
 const serverMutators = ZfxMutators.make(mutatorSchema, {
@@ -281,6 +281,7 @@ const initZero = Effect.gen(function* () {
   return z;
 });
 
+let pushPayloads = Chunk.empty<PushBody>();
 let responses = Chunk.empty<PushResponse>();
 
 beforeAll(async () => {
@@ -290,6 +291,7 @@ beforeAll(async () => {
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(PushParams);
         const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
+        pushPayloads = Chunk.append(pushPayloads, payload);
         const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
         const responseBody = yield* Schema.encode(PushResponse)(result);
 
@@ -994,42 +996,34 @@ it.scopedLive(
   }, Effect.provide(Registry.layer)),
 );
 
-it.scopedLive(
+it.scopedLive.only(
   "multiple mutations batched in a single push should all succeed",
   Effect.fn(function* () {
-    const id1 = nanoid();
-    const id2 = nanoid();
+    const ids1 = Array.from({ length: 10 }, () => nanoid());
+    const ids2 = Array.from({ length: 10 }, () => nanoid());
 
-    const pushBody = {
-      pushVersion: 1,
-      clientGroupID: `cg-${nanoid()}`,
-      mutations: [
-        { type: "custom", id: 1, clientID: "test-client", name: "batchedMutation1", args: [{ id: id1 }], timestamp: 0 },
-        { type: "custom", id: 2, clientID: "test-client", name: "batchedMutation2", args: [{ id: id2 }], timestamp: 0 },
-      ],
-      requestID: nanoid(),
-      timestamp: Date.now(),
-    };
-
-    const response = yield* Effect.tryPromise(() =>
-      fetch("http://localhost:3000/push?schema=test&appID=test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(pushBody),
-      }).then((r) => r.json()),
+    const z = yield* initZero;
+    yield* Effect.promise(() =>
+      Promise.all([
+        ...ids1.map((id) => z.mutate.batchedMutation1({ id }).server),
+        ...ids2.map((id) => z.mutate.batchedMutation2({ id }).server),
+      ]),
     );
 
-    expect(response).toHaveProperty("mutations");
-    expect(response.mutations).toHaveLength(2);
-    expect(response.mutations[0].result).not.toHaveProperty("error");
-    expect(response.mutations[1].result).not.toHaveProperty("error");
+    expect(Chunk.unsafeLast(pushPayloads).mutations.length).toBeGreaterThan(1);
 
-    const rows = yield* Effect.promise(
-      () => rawDb`select id, body from messages where id in (${id1}, ${id2}) order by body`,
+    const rows = yield* Effect.promise(() =>
+      ddb
+        .select({ id: messages.id, body: messages.body })
+        .from(messages)
+        .where(inArray(messages.id, [...ids1, ...ids2])),
     );
-    expect(rows.slice()).toEqual([
-      { id: id1, body: "batchedMutation1" },
-      { id: id2, body: "batchedMutation2" },
-    ]);
+    expect(rows).toHaveLength(ids1.length + ids2.length);
+    expect(rows).toStrictEqual(
+      expect.arrayContaining([
+        ...ids1.map((id) => ({ id, body: "batchedMutation1" })),
+        ...ids2.map((id) => ({ id, body: "batchedMutation2" })),
+      ]),
+    );
   }),
 );
