@@ -17,7 +17,7 @@ import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
 import { Atom, Registry } from "@effect-atom/atom";
 import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
-import { count, eq } from "drizzle-orm";
+import { count, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { Chunk, Console, Duration, Effect, Layer, Option, pipe, Schema, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
@@ -64,6 +64,8 @@ const mutatorSchema = ZfxMutators.schema({
   noTransaction: Schema.Void,
   doubleTransaction: Schema.Void,
   concurrentTransactions: Schema.Void,
+  batchedMutation1: Schema.Struct({ id: Schema.String }),
+  batchedMutation2: Schema.Struct({ id: Schema.String }),
 });
 
 const clientTransaction = ZfxClientTransaction.make("ClientTransaction", schema);
@@ -108,6 +110,8 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   noTransaction: Effect.fn(function* () {}),
   doubleTransaction: Effect.fn(function* () {}),
   concurrentTransactions: Effect.fn(function* () {}),
+  batchedMutation1: Effect.fn(function* (_args) {}),
+  batchedMutation2: Effect.fn(function* (_args) {}),
 });
 
 const serverMutators = ZfxMutators.make(mutatorSchema, {
@@ -181,6 +185,20 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
       ],
       { concurrency: "unbounded" },
     );
+  }),
+  batchedMutation1: Effect.fn(function* (args) {
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.mutate.messages.insert({ id: args.id, body: "batchedMutation1" });
+      })
+      .pipe(serverTransaction.execute);
+  }),
+  batchedMutation2: Effect.fn(function* (args) {
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.mutate.messages.insert({ id: args.id, body: "batchedMutation2" });
+      })
+      .pipe(serverTransaction.execute);
   }),
 });
 
@@ -263,6 +281,7 @@ const initZero = Effect.gen(function* () {
   return z;
 });
 
+let pushPayloads = Chunk.empty<PushBody>();
 let responses = Chunk.empty<PushResponse>();
 
 beforeAll(async () => {
@@ -272,6 +291,7 @@ beforeAll(async () => {
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(PushParams);
         const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
+        pushPayloads = Chunk.append(pushPayloads, payload);
         const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
         const responseBody = yield* Schema.encode(PushResponse)(result);
 
@@ -974,4 +994,36 @@ it.scopedLive(
       ]);
     }
   }, Effect.provide(Registry.layer)),
+);
+
+it.scopedLive(
+  "multiple mutations batched in a single push should all succeed",
+  Effect.fn(function* () {
+    const ids1 = Array.from({ length: 10 }, () => nanoid());
+    const ids2 = Array.from({ length: 10 }, () => nanoid());
+
+    const z = yield* initZero;
+    yield* Effect.promise(() =>
+      Promise.all([
+        ...ids1.map((id) => z.mutate.batchedMutation1({ id }).server),
+        ...ids2.map((id) => z.mutate.batchedMutation2({ id }).server),
+      ]),
+    );
+
+    expect(Chunk.unsafeLast(pushPayloads).mutations.length).toBeGreaterThan(1);
+
+    const rows = yield* Effect.promise(() =>
+      ddb
+        .select({ id: messages.id, body: messages.body })
+        .from(messages)
+        .where(inArray(messages.id, [...ids1, ...ids2])),
+    );
+    expect(rows).toHaveLength(ids1.length + ids2.length);
+    expect(rows).toStrictEqual(
+      expect.arrayContaining([
+        ...ids1.map((id) => ({ id, body: "batchedMutation1" })),
+        ...ids2.map((id) => ({ id, body: "batchedMutation2" })),
+      ]),
+    );
+  }),
 );
