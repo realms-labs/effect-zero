@@ -77,7 +77,7 @@ export const serverMutators = Mutators.make(mutatorSchema, {
       // before the transaction
       yield* Effect.log("before the transaction");
 
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         // during the transaction
         yield* Effect.log("during the transaction");
         yield* serverTransaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
@@ -162,7 +162,7 @@ import { schema } from "./schema"; // your schema
 const builder = createBuilder(schema);
 
 export const getTodoByIdQuery = Query.make({
-  name: "listTodos",
+  name: "getTodoById",
   payload: Schema.Tuple(Schema.String),
   query: Effect.fn(function* (id) {
     return yield* Effect.succeed(builder.todos.where("id", id).one());
