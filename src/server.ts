@@ -29,7 +29,9 @@ import type * as ServerTransaction from "./server-transaction.js";
 import * as Types from "./types/push.js";
 import type { TransformRequestMessage } from "./types/queries.js";
 
-// Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
+// Updated to:
+// https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
+// https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
 
 type ServerTransactionContext<TSchema extends ZeroSchema, TTransaction> = Omit<
   ReturnType<typeof ServerTransaction.make<string, TSchema, TTransaction>>,
