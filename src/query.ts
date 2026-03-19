@@ -91,11 +91,20 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
     return Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
       Effect.sync(() => view.addListener((...args) => emit.single(args))),
     ).pipe(
-      Stream.mapEffect(([data, resultType]) =>
+      Stream.mapEffect(([data, resultType, error]) =>
         Effect.sync(() => {
-          // logic here borrowed from: https://github.com/rocicorp/mono/blob/288b00ec94f5a9ae6e988513423af25c281dbb2a/packages/zero-react/src/use-query.tsx#L295
+          // logic here borrowed from: https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/zero-react/src/use-query.tsx#L543
           const cloned = data === undefined ? data : (deepClone(data as ReadonlyJSONValue) as HumanReadable<R>);
-          return getSnapshot<R>(asQueryInternals(query).format.singular, cloned, resultType);
+          return getSnapshot<R>(
+            asQueryInternals(query).format.singular,
+            cloned,
+            resultType,
+            // TODO: Look into this. It seems like this is difficult but not impossible to model in the Effect paradigm.
+            // Likely need some kind of stateful piece between the publisher and and subscriber, allowing the subscriber to swap out
+            // the publisher when this function is called.
+            () => Effect.dieMessage("retry not available in `effect-zero`"),
+            error,
+          );
         }),
       ),
       Stream.map(QueryResult.make),
