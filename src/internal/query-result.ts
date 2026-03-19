@@ -1,8 +1,5 @@
-import type {
-  HumanReadable,
-  QueryResult as ZeroQueryResult,
-  QueryResultDetails as ZeroQueryResultDetails,
-} from "@rocicorp/zero/react";
+import type { HumanReadable, QueryResultDetails as ZeroQueryResultDetails } from "@rocicorp/zero";
+import type { QueryResult as ZeroQueryResult } from "@rocicorp/zero/react";
 import * as Match from "effect/Match";
 
 // Our internal representation of Zero's QueryResult type.
