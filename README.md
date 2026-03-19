@@ -255,7 +255,7 @@ import { Atom } from "@effect-atom/atom";
 const todoAtom = Atom.fn(Effect.fn(function* (id: string, get: Atom.FnContext) {
   const query = yield* getTodoByIdQuery(id);
   return yield* get.result(queryAtom(query));
-});
+}));
 ```
 
 > **Note:** Queries created via `Query.make` implement the [`Equal` trait](https://effect.website/docs/trait/equal/), so `Atom.family` would properly cache the results when using queries as arguments.

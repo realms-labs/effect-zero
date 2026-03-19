@@ -1,4 +1,5 @@
 import type { HumanReadable, ReadonlyJSONValue, Zero, Query as ZeroQuery, Schema as ZeroSchema } from "@rocicorp/zero";
+import { asQueryInternals } from "@rocicorp/zero/bindings";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
@@ -9,8 +10,6 @@ import * as Subscribable from "effect/Subscribable";
 import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
-
-export type Query<S extends ZeroSchema, T extends keyof S["tables"] & string, R> = ZeroQuery<S, T, R> & Equal.Equal;
 
 type QueryArgs<
   A extends ReadonlyJSONValue[],
@@ -29,8 +28,8 @@ export const make = <
   A extends ReadonlyJSONValue[],
   // The decoded format, can be anything
   B extends unknown[],
-  S extends ZeroSchema,
   T extends keyof S["tables"] & string,
+  S extends ZeroSchema,
   R,
   E,
   R1,
@@ -38,7 +37,7 @@ export const make = <
 >(options: {
   name: N;
   payload: Schema.Schema<readonly [...B], readonly [...A], R1>;
-  query: (...args: NoInfer<B>) => Effect.Effect<ZeroQuery<S, T, R>, E, R2>;
+  query: (...args: NoInfer<B>) => Effect.Effect<ZeroQuery<T, S, R>, E, R2>;
 }) => {
   const runQuery = Effect.fn(function* (args: QueryArgs<A, B>) {
     const { encoded, decoded } = yield* Match.valueTags(args, {
@@ -50,12 +49,12 @@ export const make = <
 
     return yield* options.query(...decoded).pipe(
       Effect.map((rawQuery) => {
-        const query = rawQuery.nameAndArgs(
+        const query = asQueryInternals(rawQuery).nameAndArgs(
           options.name,
           // We pass the encoded `args` to the `nameAndArgs` method, as that is the wire format which
           // is sent to the server.
           encoded,
-        ) as Query<S, T, R>;
+        ) as ZeroQuery<T, S, R> & Equal.Equal;
         // Adapted from https://github.com/rocicorp/mono/blob/17171f975e61f7ec93c61569da7bda1d962ac962/packages/zero-protocol/src/query-hash.ts#L17
         query[Hash.symbol] = () => Hash.string(`${options.name}:${JSON.stringify(encoded)}`);
         query[Equal.symbol] = function (that) {
@@ -80,13 +79,12 @@ export const make = <
 // biome-ignore lint/suspicious/noExplicitAny: accept any query
 export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   // biome-ignore lint/suspicious/noExplicitAny: accept any query
-  typeof make<string, any, any, ZeroSchema, string, Record<string, any> | undefined, E, R1, R2>
+  typeof make<string, any, any, string, ZeroSchema, Record<string, any> | undefined, E, R1, R2>
 >;
 
-export const stream = <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
+export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   zero: Zero<S>,
-  // TODO: Look into why this is needed, instead of just `ZeroQuery<S, T, R>`
-  query: ZeroQuery<S, T, R> | Query<S, T, R>,
+  query: ZeroQuery<T, S, R>,
 ) =>
   Effect.gen(function* () {
     const view = yield* Effect.acquireRelease(
@@ -100,25 +98,24 @@ export const stream = <S extends ZeroSchema, T extends keyof S["tables"] & strin
       Stream.mapEffect(([data, resultType]) =>
         Effect.sync(() => {
           // logic here borrowed from: https://github.com/rocicorp/mono/blob/288b00ec94f5a9ae6e988513423af25c281dbb2a/packages/zero-react/src/use-query.tsx#L295
-          // TODO: Look into why cast needs to be applied to whole ternary here, unlike source.
-          const cloned = (data === undefined ? data : deepClone(data as ReadonlyJSONValue)) as HumanReadable<R>;
-          return getSnapshot<R>(query.format.singular, cloned, resultType);
+          const cloned = data === undefined ? data : (deepClone(data as ReadonlyJSONValue) as HumanReadable<R>);
+          return getSnapshot<R>(asQueryInternals(query).format.singular, cloned, resultType);
         }),
       ),
       Stream.map(QueryResult.make),
     );
   }).pipe(Stream.unwrapScoped);
 
-export const initialValue = <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
-  query: ZeroQuery<S, T, R> | Query<S, T, R>,
-) => QueryResult.make<R>(getDefaultSnapshot(query.format.singular));
+export const initialValue = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
+  query: ZeroQuery<T, S, R>,
+) => QueryResult.make<R>(getDefaultSnapshot(asQueryInternals(query).format.singular));
 
-export const subscribable = <S extends ZeroSchema, T extends keyof S["tables"] & string, R>(
+export const subscribable = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   zero: Zero<S>,
-  query: ZeroQuery<S, T, R> | Query<S, T, R>,
+  query: ZeroQuery<T, S, R>,
 ) => {
   return Subscribable.make({
-    get: Effect.promise(() => zero.run(query as ZeroQuery<S, T, R>, { type: "unknown" })).pipe(
+    get: Effect.promise(() => zero.run(query, { type: "unknown" })).pipe(
       Effect.map((value) => ({ _tag: "Partial", value }) satisfies QueryResult.QueryResult.Partial<R>),
     ),
     changes: stream(zero, query),
