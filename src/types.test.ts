@@ -230,7 +230,7 @@ describe("Type tests", () => {
     it("query should accept and passthrough encoded non-JSON args", () => {
       const transformArgsQuery = Query.make({
         name: "transformArgs",
-        payload: Schema.Tuple(Schema.DateFromNumber),
+        payload: Schema.DateFromNumber,
         query: Effect.fn(function* (a) {
           // Inside the query, 'a' should be the decoded type (Date)
           expectTypeOf<typeof a>().toEqualTypeOf<Date>();
@@ -245,7 +245,7 @@ describe("Type tests", () => {
     it("query with string tuple should have correct parameter types", () => {
       const stringQuery = Query.make({
         name: "stringQuery",
-        payload: Schema.Tuple(Schema.String),
+        payload: Schema.String,
         query: Effect.fn(function* (s) {
           expectTypeOf<typeof s>().toEqualTypeOf<string>();
           return yield* Effect.succeed(makeMockQuery());
@@ -255,41 +255,42 @@ describe("Type tests", () => {
       expectTypeOf<Parameters<typeof stringQuery>>().toEqualTypeOf<[string]>();
     });
 
-    it("query with multiple args should have correct parameter types", () => {
-      const multiArgQuery = Query.make({
-        name: "multiArgQuery",
-        payload: Schema.Tuple(Schema.String, Schema.Number),
-        query: Effect.fn(function* (s, n) {
-          expectTypeOf<typeof s>().toEqualTypeOf<string>();
-          expectTypeOf<typeof n>().toEqualTypeOf<number>();
-          return yield* Effect.succeed(makeMockQuery());
-        }),
-      });
+    // Queries were changed to only support a single argument in 0.25
+    //
+    // it("query with multiple args should have correct parameter types", () => {
+    //   const multiArgQuery = Query.make({
+    //     name: "multiArgQuery",
+    //     payload: Schema.Tuple(Schema.String, Schema.Number),
+    //     query: Effect.fn(function* (s, n) {
+    //       expectTypeOf<typeof s>().toEqualTypeOf<string>();
+    //       expectTypeOf<typeof n>().toEqualTypeOf<number>();
+    //       return yield* Effect.succeed(makeMockQuery());
+    //     }),
+    //   });
 
-      expectTypeOf<Parameters<typeof multiArgQuery>>().toEqualTypeOf<[string, number]>();
-    });
+    //   expectTypeOf<Parameters<typeof multiArgQuery>>().toEqualTypeOf<[string, number]>();
+    // });
 
     it("query with no args should have empty parameter types", () => {
       const noArgQuery = Query.make({
         name: "noArgQuery",
-        payload: Schema.Tuple(),
+        payload: Schema.Void,
         query: Effect.fn(function* () {
           return yield* Effect.succeed(makeMockQuery());
         }),
       });
 
-      expectTypeOf<Parameters<typeof noArgQuery>>().toEqualTypeOf<[]>();
+      // biome-ignore lint/suspicious/noConfusingVoidType: Necessary for type check
+      expectTypeOf<Parameters<typeof noArgQuery>>().toEqualTypeOf<[arg?: void]>();
     });
 
     it("query with complex struct arg should have correct parameter types", () => {
       const complexQuery = Query.make({
         name: "complexQuery",
-        payload: Schema.Tuple(
-          Schema.Struct({
-            id: Schema.String,
-            nested: Schema.Struct({ value: Schema.Number }),
-          }),
-        ),
+        payload: Schema.Struct({
+          id: Schema.String,
+          nested: Schema.Struct({ value: Schema.Number }),
+        }),
         query: Effect.fn(function* (arg: { id: string; nested: { value: number } }) {
           expectTypeOf<typeof arg>().toEqualTypeOf<{ id: string; nested: { value: number } }>();
           return yield* Effect.succeed(makeMockQuery());

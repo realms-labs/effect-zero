@@ -20,7 +20,7 @@ describe("Query hashing", () => {
   const makeTestQuery = (name: string) =>
     Query.make({
       name,
-      payload: Schema.Tuple(Schema.String),
+      payload: Schema.String,
       query: () => Effect.succeed(makeMockQuery()),
     });
 
@@ -122,7 +122,7 @@ describe("Query hashing", () => {
     Effect.fn(function* ({ expect }) {
       const complexQuery = Query.make({
         name: "complexQuery",
-        payload: Schema.Tuple(Schema.Struct({ id: Schema.String, nested: Schema.Struct({ value: Schema.Number }) })),
+        payload: Schema.Struct({ id: Schema.String, nested: Schema.Struct({ value: Schema.Number }) }),
         query: () => Effect.succeed(makeMockQuery()),
       });
 

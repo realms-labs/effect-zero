@@ -209,7 +209,7 @@ const builder = createBuilder(schema);
 
 const messageByIdQuery = ZfxQuery.make({
   name: "messageById",
-  payload: Schema.Tuple(Schema.String),
+  payload: Schema.String,
   query: Effect.fn(function* (id) {
     return yield* Effect.succeed(builder.messages.where("id", id).one());
   }),
@@ -217,7 +217,7 @@ const messageByIdQuery = ZfxQuery.make({
 
 const messagesQuery = ZfxQuery.make({
   name: "messages",
-  payload: Schema.Tuple(),
+  payload: Schema.Void,
   query: Effect.fn(function* () {
     // TODO: figure out why base queries (without `.limit()`) don't receive `completed` events
     return yield* Effect.succeed(builder.messages.limit(100));
@@ -228,7 +228,7 @@ const transformArgsQuerySpy = vi.fn();
 
 const transformArgsQuery = ZfxQuery.make({
   name: "transformArgs",
-  payload: Schema.Tuple(Schema.DateFromNumber),
+  payload: Schema.DateFromNumber,
   query: Effect.fn(function* (a) {
     expectTypeOf<typeof a>().toEqualTypeOf<Date>();
     transformArgsQuerySpy(a);
@@ -257,6 +257,7 @@ const initZero = Effect.gen(function* () {
     userID: "anon",
     server: "http://localhost:4848",
     mutateURL: "http://localhost:3000/push",
+    queryURL: "http://localhost:3000/query",
   });
 
   const c = yield* Effect.promise(() =>

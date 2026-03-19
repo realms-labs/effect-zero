@@ -11,13 +11,8 @@ import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
-type QueryArgs<
-  A extends ReadonlyJSONValue[],
-  B extends unknown[],
-> = // biome-ignore lint/suspicious/noExplicitAny: handles "any query" case
-| { _tag: "Encoded"; args: any extends A ? any : readonly [...A] }
-// biome-ignore lint/suspicious/noExplicitAny: handles "any query" case
-| { _tag: "Decoded"; args: any extends B ? any : readonly [...B] };
+// biome-ignore lint/suspicious/noConfusingVoidType: necessary to allow Schema.Void
+type QueryArgs<A extends ReadonlyJSONValue | void, B> = { _tag: "Encoded"; args: A } | { _tag: "Decoded"; args: B };
 
 export const RunQuerySymbol = Symbol.for(prefixId("RunQuery"));
 export const QueryNameSymbol = Symbol.for(prefixId("QueryName"));
@@ -25,9 +20,10 @@ export const QueryNameSymbol = Symbol.for(prefixId("QueryName"));
 export const make = <
   N extends string,
   // The encoded format that is sent over the wire, must conform to JSON
-  A extends ReadonlyJSONValue[],
+  // biome-ignore lint/suspicious/noConfusingVoidType: necessary to allow Schema.Void
+  A extends ReadonlyJSONValue | void,
   // The decoded format, can be anything
-  B extends unknown[],
+  B,
   T extends keyof S["tables"] & string,
   S extends ZeroSchema,
   R,
@@ -36,8 +32,8 @@ export const make = <
   R2,
 >(options: {
   name: N;
-  payload: Schema.Schema<readonly [...B], readonly [...A], R1>;
-  query: (...args: NoInfer<B>) => Effect.Effect<ZeroQuery<T, S, R>, E, R2>;
+  payload: Schema.Schema<B, A, R1>;
+  query: (args: NoInfer<B>) => Effect.Effect<ZeroQuery<T, S, R>, E, R2>;
 }) => {
   const runQuery = Effect.fn(function* (args: QueryArgs<A, B>) {
     const { encoded, decoded } = yield* Match.valueTags(args, {
@@ -47,13 +43,13 @@ export const make = <
         Effect.map(Schema.encode(options.payload)(decoded), (encoded) => ({ encoded, decoded })),
     });
 
-    return yield* options.query(...decoded).pipe(
+    return yield* options.query(decoded).pipe(
       Effect.map((rawQuery) => {
         const query = asQueryInternals(rawQuery).nameAndArgs(
           options.name,
           // We pass the encoded `args` to the `nameAndArgs` method, as that is the wire format which
           // is sent to the server.
-          encoded,
+          encoded !== undefined ? [encoded] : [],
         ) as ZeroQuery<T, S, R> & Equal.Equal;
         // Adapted from https://github.com/rocicorp/mono/blob/17171f975e61f7ec93c61569da7bda1d962ac962/packages/zero-protocol/src/query-hash.ts#L17
         query[Hash.symbol] = () => Hash.string(`${options.name}:${JSON.stringify(encoded)}`);
@@ -69,7 +65,7 @@ export const make = <
   });
 
   // We return a callable object for ease of use on the frontend.
-  return Object.assign((...args: B) => runQuery({ _tag: "Decoded", args }), {
+  return Object.assign((args: B) => runQuery({ _tag: "Decoded", args }), {
     [QueryNameSymbol]: options.name,
     // Internally, we include the full `runQuery` function for use in library's server logic.
     [RunQuerySymbol]: runQuery,
