@@ -313,7 +313,7 @@ beforeAll(async () => {
       "/query",
       Effect.gen(function* () {
         const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-        const response = yield* ZfxServer.handleQueryRequest(queries, schema, payload);
+        const response = yield* ZfxServer.handleQuery(queries, schema, payload);
         return yield* HttpServerResponse.json(response);
       }).pipe(
         Effect.catchAllCause(
