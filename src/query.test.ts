@@ -1,4 +1,5 @@
 import { describe, it } from "@effect/vitest";
+import { queryInternalsTag } from "@rocicorp/zero/bindings";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
@@ -9,6 +10,7 @@ describe("Query hashing", () => {
   // biome-ignore lint/suspicious/noExplicitAny: allowed in tests
   const makeMockQuery = (): any => {
     const mockQuery = {
+      [queryInternalsTag]: true,
       format: { singular: false },
       nameAndArgs: () => mockQuery,
     };
