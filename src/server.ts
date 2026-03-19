@@ -1,5 +1,5 @@
 import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
-import { handleGetQueriesRequest } from "@rocicorp/zero/server";
+import { handleQueryRequest } from "@rocicorp/zero/server";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Chunk from "effect/Chunk";
@@ -28,6 +28,10 @@ import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.j
 import type * as ServerTransaction from "./server-transaction.js";
 import * as Types from "./types/push.js";
 import type { TransformRequestMessage } from "./types/queries.js";
+
+// Updated to:
+// https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
+// https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
 
 type ServerTransactionContext<TSchema extends ZeroSchema, TTransaction> = Omit<
   ReturnType<typeof ServerTransaction.make<string, TSchema, TTransaction>>,
@@ -181,7 +185,7 @@ class MutationUserError extends Data.TaggedError("MutationUserError")<{
   }
 }
 
-export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
+export const handleQuery = Effect.fn(function* <E, R1, R2>(
   queries: MakeQueryResult<E, R1, R2>[],
   schema: ZeroSchema,
   payload: TransformRequestMessage,
@@ -189,19 +193,15 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
   const runtime = yield* Effect.runtime<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
-      handleGetQueriesRequest(
+      handleQueryRequest(
         (name, args) =>
           Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
             Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ name })),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
-            Effect.map((query) => ({ query })),
-            (effect) => Runtime.runPromiseExit(runtime, effect),
-            (exit) =>
-              exit.then(
-                Exit.getOrElse((cause) => {
-                  throw new QueryUserError<E>({ cause });
-                }),
-              ),
+            (effect) => Runtime.runSyncExit(runtime, effect),
+            Exit.getOrElse((cause) => {
+              throw new QueryUserError<E>({ cause });
+            }),
           ),
         schema,
         payload as ReadonlyJSONValue,
@@ -209,7 +209,7 @@ export const handleGetQueries = Effect.fn(function* <E, R1, R2>(
     catch: (e) =>
       Option.liftPredicate(e, QueryUserError.is<E>).pipe(
         Option.flatMap((e) => Cause.failureOption(e.cause)),
-        Option.getOrElse(() => new GetQueriesError({ cause: Cause.fail(e) })),
+        Option.getOrElse(() => new QueryRequestError({ cause: Cause.fail(e) })),
       ),
   });
 });
@@ -230,4 +230,4 @@ class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{
   }
 }
 
-class GetQueriesError extends Data.TaggedError("GetQueriesError")<{ cause: Cause.Cause<unknown> }> {}
+class QueryRequestError extends Data.TaggedError("QueryRequestError")<{ cause: Cause.Cause<unknown> }> {}

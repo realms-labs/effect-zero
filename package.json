@@ -19,7 +19,7 @@
     "@effect-atom/atom": "^0.4.3",
     "@effect/language-service": "^0.55.2",
     "@effect/vitest": "^0.27.0",
-    "@rocicorp/zero": "^0.24.3000000000",
+    "@rocicorp/zero": "^0.26.1",
     "@types/bun": "latest",
     "@types/fs-extra": "^11.0.4",
     "effect": "^3.19.3",

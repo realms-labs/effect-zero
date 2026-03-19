@@ -1,4 +1,5 @@
 import { describe, it } from "@effect/vitest";
+import { queryInternalsTag } from "@rocicorp/zero/bindings";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
@@ -9,6 +10,7 @@ describe("Query hashing", () => {
   // biome-ignore lint/suspicious/noExplicitAny: allowed in tests
   const makeMockQuery = (): any => {
     const mockQuery = {
+      [queryInternalsTag]: true,
       format: { singular: false },
       nameAndArgs: () => mockQuery,
     };
@@ -18,7 +20,7 @@ describe("Query hashing", () => {
   const makeTestQuery = (name: string) =>
     Query.make({
       name,
-      payload: Schema.Tuple(Schema.String),
+      payload: Schema.String,
       query: () => Effect.succeed(makeMockQuery()),
     });
 
@@ -120,7 +122,7 @@ describe("Query hashing", () => {
     Effect.fn(function* ({ expect }) {
       const complexQuery = Query.make({
         name: "complexQuery",
-        payload: Schema.Tuple(Schema.Struct({ id: Schema.String, nested: Schema.Struct({ value: Schema.Number }) })),
+        payload: Schema.Struct({ id: Schema.String, nested: Schema.Struct({ value: Schema.Number }) }),
         query: () => Effect.succeed(makeMockQuery()),
       });
 

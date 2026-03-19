@@ -20,7 +20,7 @@ type ClientTransactionContext<TSchema extends ZeroSchema> = Omit<
 export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
   transaction: ClientTransactionContext<TSchema>,
   mutators: TMutators,
-  options: Omit<ZeroOptions<TSchema>, "schema" | "mutators">,
+  options: Omit<ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>, "schema" | "mutators">,
 ) {
   const runtime =
     yield* Effect.runtime<
@@ -28,7 +28,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
     >();
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
-    return async (tx: ZeroTransaction<TSchema>, args: unknown) => {
+    return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
       const exit = await Schema.decode(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
         Effect.catchTag("ParseError", (e) => new ClientArgsParseError({ cause: Cause.fail(e) })),
         Effect.flatMap(mutator),
@@ -44,7 +44,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 
   const unwrappedMutators = Rec.map(mutators, (v) =>
     Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
-  ) as UnwrapMutators<TSchema, TMutators>;
+  ) as ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>["mutators"];
 
   return yield* Effect.acquireRelease(
     Effect.sync(() => {

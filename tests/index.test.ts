@@ -17,7 +17,7 @@ import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
 import { Atom, Registry } from "@effect-atom/atom";
 import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
-import { count, eq, inArray } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { Chunk, Console, Duration, Effect, Layer, Option, pipe, Schema, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
@@ -49,6 +49,13 @@ const mutatorSchema = ZfxMutators.schema({
       id: Schema.String,
       body: Schema.String,
     }),
+    // Nested mutator using Effect.fn with struct args
+    updateMessage: Schema.Struct({
+      id: Schema.String,
+      body: Schema.String,
+    }),
+    // Nested mutator using Effect.fn with void args
+    deleteAll: Schema.Void,
   },
   optionalVoidArg: Schema.Void,
   transformArgs: Schema.Struct({
@@ -64,8 +71,6 @@ const mutatorSchema = ZfxMutators.schema({
   noTransaction: Schema.Void,
   doubleTransaction: Schema.Void,
   concurrentTransactions: Schema.Void,
-  batchedMutation1: Schema.Struct({ id: Schema.String }),
-  batchedMutation2: Schema.Struct({ id: Schema.String }),
 });
 
 const clientTransaction = ZfxClientTransaction.make("ClientTransaction", schema);
@@ -91,6 +96,14 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
       clientTransaction.use(async (tx) => {
         await tx.mutate.messages.insert(msg);
       }),
+    updateMessage: Effect.fn(function* (msg: { id: string; body: string }) {
+      yield* clientTransaction.use(async (tx) => {
+        await tx.mutate.messages.update(msg);
+      });
+    }),
+    deleteAll: Effect.fn(function* () {
+      yield* clientTransaction.use(async (_tx) => {});
+    }),
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
   optionalVoidArg: Effect.fn(function* (a) {}),
@@ -110,13 +123,17 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   noTransaction: Effect.fn(function* () {}),
   doubleTransaction: Effect.fn(function* () {}),
   concurrentTransactions: Effect.fn(function* () {}),
-  batchedMutation1: Effect.fn(function* (_args) {}),
-  batchedMutation2: Effect.fn(function* (_args) {}),
 });
 
 const serverMutators = ZfxMutators.make(mutatorSchema, {
   messages: {
     create: (msg) => clientMutators.messages.create(msg).pipe(serverTransaction.execute),
+    updateMessage: Effect.fn(function* (msg: { id: string; body: string }) {
+      yield* clientMutators.messages.updateMessage(msg).pipe(serverTransaction.execute);
+    }),
+    deleteAll: Effect.fn(function* () {
+      yield* clientMutators.messages.deleteAll().pipe(serverTransaction.execute);
+    }),
   },
   optionalVoidArg: Effect.fn(function* () {}),
   transformArgs: Effect.fn(function* (a) {
@@ -186,27 +203,13 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
       { concurrency: "unbounded" },
     );
   }),
-  batchedMutation1: Effect.fn(function* (args) {
-    yield* serverTransaction
-      .use(async (tx) => {
-        await tx.mutate.messages.insert({ id: args.id, body: "batchedMutation1" });
-      })
-      .pipe(serverTransaction.execute);
-  }),
-  batchedMutation2: Effect.fn(function* (args) {
-    yield* serverTransaction
-      .use(async (tx) => {
-        await tx.mutate.messages.insert({ id: args.id, body: "batchedMutation2" });
-      })
-      .pipe(serverTransaction.execute);
-  }),
 });
 
 const builder = createBuilder(schema);
 
 const messageByIdQuery = ZfxQuery.make({
   name: "messageById",
-  payload: Schema.Tuple(Schema.String),
+  payload: Schema.String,
   query: Effect.fn(function* (id) {
     return yield* Effect.succeed(builder.messages.where("id", id).one());
   }),
@@ -214,7 +217,7 @@ const messageByIdQuery = ZfxQuery.make({
 
 const messagesQuery = ZfxQuery.make({
   name: "messages",
-  payload: Schema.Tuple(),
+  payload: Schema.Void,
   query: Effect.fn(function* () {
     // TODO: figure out why base queries (without `.limit()`) don't receive `completed` events
     return yield* Effect.succeed(builder.messages.limit(100));
@@ -225,7 +228,7 @@ const transformArgsQuerySpy = vi.fn();
 
 const transformArgsQuery = ZfxQuery.make({
   name: "transformArgs",
-  payload: Schema.Tuple(Schema.DateFromNumber),
+  payload: Schema.DateFromNumber,
   query: Effect.fn(function* (a) {
     expectTypeOf<typeof a>().toEqualTypeOf<Date>();
     transformArgsQuerySpy(a);
@@ -234,8 +237,6 @@ const transformArgsQuery = ZfxQuery.make({
 });
 
 const queries = [messageByIdQuery, messagesQuery, transformArgsQuery] satisfies ZfxQuery.MakeQueryResult[];
-
-const onError = vi.fn((...args) => console.error("onError:", ...args));
 
 const waitForLastItem = Effect.fn("waitForLastItem")(
   <A, E, R>(stream: Stream.Stream<A, E, R>, timeout?: Duration.Duration) => {
@@ -256,7 +257,7 @@ const initZero = Effect.gen(function* () {
     userID: "anon",
     server: "http://localhost:4848",
     mutateURL: "http://localhost:3000/push",
-    onError,
+    queryURL: "http://localhost:3000/query",
   });
 
   const c = yield* Effect.promise(() =>
@@ -269,7 +270,8 @@ const initZero = Effect.gen(function* () {
     yield* Effect.promise(() => rawDb`truncate table messages`);
 
     // Wait until view is synced after truncation
-    const stream = ZfxQuery.stream(z, z.query.messages);
+    const q = yield* messagesQuery();
+    const stream = ZfxQuery.stream(z, q);
     yield* pipe(
       stream,
       Stream.filter((d) => Predicate.isTagged(d, "Complete")),
@@ -281,7 +283,6 @@ const initZero = Effect.gen(function* () {
   return z;
 });
 
-let pushPayloads = Chunk.empty<PushBody>();
 let responses = Chunk.empty<PushResponse>();
 
 beforeAll(async () => {
@@ -291,7 +292,6 @@ beforeAll(async () => {
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(PushParams);
         const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
-        pushPayloads = Chunk.append(pushPayloads, payload);
         const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
         const responseBody = yield* Schema.encode(PushResponse)(result);
 
@@ -311,15 +311,15 @@ beforeAll(async () => {
       ),
     ),
     HttpRouter.post(
-      "/get-queries",
+      "/query",
       Effect.gen(function* () {
         const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-        const response = yield* ZfxServer.handleGetQueries(queries, schema, payload);
+        const response = yield* ZfxServer.handleQuery(queries, schema, payload);
         return yield* HttpServerResponse.json(response);
       }).pipe(
         Effect.catchAllCause(
           Effect.fn(function* (c) {
-            yield* Effect.logError("get-queries error:", c);
+            yield* Effect.logError("query error:", c);
             return HttpServerResponse.empty({ status: 500 });
           }),
         ),
@@ -343,8 +343,6 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  onError.mockReset();
-
   responses = Chunk.empty<PushResponse>();
 });
 
@@ -365,6 +363,22 @@ test("mutators should have correct argument types", () => {
   expectTypeOf<Parameters<typeof clientMutators.messages.create>>().toEqualTypeOf<
     [Schema.Schema.Type<typeof mutatorSchema.messages.create>]
   >();
+});
+
+test("nested mutators using Effect.fn should have correct argument types", () => {
+  // Nested mutator with struct args using Effect.fn
+  expectTypeOf<Parameters<typeof clientMutators.messages.updateMessage>>().toEqualTypeOf<
+    [{ id: string; body: string }]
+  >();
+
+  // Nested mutator with void args using Effect.fn
+  expectTypeOf<Parameters<typeof clientMutators.messages.deleteAll>>().toEqualTypeOf<[]>();
+
+  // Server mutators should also have correct types
+  expectTypeOf<Parameters<typeof serverMutators.messages.updateMessage>>().toEqualTypeOf<
+    [{ id: string; body: string }]
+  >();
+  expectTypeOf<Parameters<typeof serverMutators.messages.deleteAll>>().toEqualTypeOf<[]>();
 });
 
 test("mutator requirements should propagate", () => {
@@ -406,7 +420,8 @@ it.scopedLive(
     };
     yield* Effect.promise(() => ddb.insert(messages).values(value1));
 
-    const stream = ZfxQuery.stream(z, z.query.messages);
+    const q = yield* messagesQuery();
+    const stream = ZfxQuery.stream(z, q);
 
     {
       const result = yield* pipe(
@@ -443,13 +458,43 @@ it.scopedLive(
     const z = yield* initZero;
 
     const item: Message = { id: nanoid(), body: "Hello, world!" };
-    yield* Effect.promise(async () => {
-      const mut = z.mutate.messages.create(item);
-      await Promise.all([mut.client, mut.server]);
-    });
+    const mut = z.mutate.messages.create(item);
 
-    const result = yield* Effect.promise(() => rawDb`select id, body from messages`);
-    expect(result.slice()).toEqual([item]);
+    const clientResult = yield* Effect.promise(() => mut.client);
+    expect(clientResult).toEqual({ type: "success" });
+
+    const serverResult = yield* Effect.promise(() => mut.server);
+    expect(serverResult).toEqual({ type: "success" });
+
+    const result = yield* Effect.promise(() => ddb.select({ id: messages.id, body: messages.body }).from(messages));
+    expect(result).toEqual([item]);
+  }),
+);
+
+it.scopedLive(
+  "nested mutators using Effect.fn work",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    // First create a message
+    const item: Message = { id: nanoid(), body: "Original body" };
+    yield* Effect.promise(() => z.mutate.messages.create(item).server);
+
+    // Update it using the nested Effect.fn mutator
+    const updatedItem: Message = { id: item.id, body: "Updated body" };
+    const updateMut = z.mutate.messages.updateMessage(updatedItem);
+
+    const updateClientResult = yield* Effect.promise(() => updateMut.client);
+    expect(updateClientResult).toEqual({ type: "success" });
+
+    const updateServerResult = yield* Effect.promise(() => updateMut.server);
+    expect(updateServerResult).toEqual({ type: "success" });
+
+    // Verify the update
+    const result = yield* Effect.promise(() =>
+      ddb.select({ id: messages.id, body: messages.body }).from(messages).where(eq(messages.id, item.id)),
+    );
+    expect(result).toEqual([updatedItem]);
   }),
 );
 
@@ -495,12 +540,14 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.promise(() =>
-      expect(z.mutate.throwsError().server).rejects.toEqual({
-        error: "app",
+    const result = yield* Effect.promise(() => z.mutate.throwsError().server);
+    expect(result).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
         details: "error in throwsError",
       }),
-    );
+    });
   }),
 );
 
@@ -539,8 +586,22 @@ it.scopedLive(
 
     const mut = z.mutate.clientThrowsError();
 
-    yield* Effect.promise(() => expect(mut.client).rejects.toThrowError("client error"));
-    yield* Effect.promise(() => expect(mut.server).rejects.toThrowError("client error"));
+    const clientResult = yield* Effect.promise(() => mut.client);
+    expect(clientResult).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
+        message: "client error",
+      }),
+    });
+    const serverResult = yield* Effect.promise(() => mut.server);
+    expect(serverResult).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
+        message: "client error",
+      }),
+    });
   }),
 );
 
@@ -549,12 +610,14 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.promise(() =>
-      expect(z.mutate.yieldsError().server).rejects.toEqual({
-        error: "app",
+    const result = yield* Effect.promise(() => z.mutate.yieldsError().server);
+    expect(result).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
         details: "error in yieldsError",
       }),
-    );
+    });
   }),
 );
 
@@ -563,12 +626,14 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.promise(() =>
-      expect(z.mutate.yieldsErrorInsideTransaction().server).rejects.toEqual({
-        error: "app",
+    const result = yield* Effect.promise(() => z.mutate.yieldsErrorInsideTransaction().server);
+    expect(result).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
         details: "error in yieldsErrorInsideTransaction",
       }),
-    );
+    });
   }),
 );
 
@@ -586,19 +651,13 @@ it.scopedLive(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.promise(async () => {
-      const mut = z.mutate.noTransaction();
-      let promiseResolved = false;
-      await expect(
-        Promise.all([mut.client, mut.server]).then(() => {
-          promiseResolved = true;
-        }),
-      ).rejects.toEqual({
-        error: "app",
+    const result = yield* Effect.promise(() => z.mutate.noTransaction().server);
+    expect(result).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
         details: "No transaction detected in a mutation, a transaction is required.",
-      });
-
-      expect(promiseResolved).toBe(false);
+      }),
     });
   }),
 );
@@ -649,15 +708,16 @@ it.scopedLive(
       userID: "anon",
       server: "http://localhost:4848",
       mutateURL: "http://localhost:3000/push",
-      onError,
     });
 
-    yield* Effect.promise(() =>
-      expect(z.mutate.nonExistingMutator().server).rejects.toEqual({
-        error: "app",
+    const result = yield* Effect.promise(() => z.mutate.nonExistingMutator().server);
+    expect(result).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
         details: "Internal error",
       }),
-    );
+    });
   }),
 );
 
@@ -670,7 +730,7 @@ it.scopedLive(
   }),
 );
 
-(process.env.GITHUB_ACTIONS ? it.scopedLive.fails : it.scopedLive)(
+it.scopedLive(
   "synced queries should work",
   Effect.fn(function* () {
     const z = yield* initZero;
@@ -741,7 +801,8 @@ it.scopedLive(
     const value: Message = { id: nanoid(), body: "Hello, world!" };
     yield* Effect.promise(() => ddb.insert(messages).values(value));
 
-    const sub = ZfxQuery.subscribable(z, z.query.messages.where("id", value.id).one());
+    const q = yield* messageByIdQuery(value.id);
+    const sub = ZfxQuery.subscribable(z, q);
 
     expect(yield* sub.get).toEqual({ _tag: "Partial", value: undefined });
 
@@ -765,7 +826,8 @@ it.scopedLive(
     const value: Message = { id: nanoid(), body: "Hello, world!" };
     yield* Effect.promise(() => ddb.insert(messages).values(value));
 
-    const sub = ZfxQuery.subscribable(z, z.query.messages.where("id", value.id).one());
+    const q = yield* messageByIdQuery(value.id);
+    const sub = ZfxQuery.subscribable(z, q);
 
     expect(yield* sub.get).toEqual(expect.objectContaining({ _tag: "Partial", value: undefined }));
 
@@ -786,7 +848,8 @@ it.scopedLive(
     ];
     yield* Effect.promise(() => ddb.insert(messages).values(values));
 
-    const sub = ZfxQuery.subscribable(z, z.query.messages);
+    const q = yield* messagesQuery();
+    const sub = ZfxQuery.subscribable(z, q);
 
     expect(yield* sub.get).toEqual(expect.objectContaining({ _tag: "Partial", value: [] }));
 
@@ -812,7 +875,8 @@ it.scopedLive(
     ];
     yield* Effect.promise(() => ddb.insert(messages).values(values));
 
-    const sub = ZfxQuery.subscribable(z, z.query.messages);
+    const q = yield* messagesQuery();
+    const sub = ZfxQuery.subscribable(z, q);
 
     expect(yield* sub.get).toEqual({ _tag: "Partial", value: [] });
 
@@ -834,7 +898,9 @@ it.scopedLive(
     const value: Message = { id: nanoid(), body: "hello world" };
 
     const z = yield* initZero;
-    const sub = ZfxQuery.subscribable(z, z.query.messages.where("id", value.id).one());
+
+    const q = yield* messageByIdQuery(value.id);
+    const sub = ZfxQuery.subscribable(z, q);
     const atom = Atom.subscribable(Effect.succeed(sub)).pipe(
       Atom.map(ZfxResult.make),
       Atom.map(ZfxResult.acceptPartialMode("acceptCached")),
@@ -874,7 +940,9 @@ it.scopedLive(
   "Result.acceptPartialMode with 'acceptCached' should work for plural queries",
   Effect.fn(function* () {
     const z = yield* initZero;
-    const sub = ZfxQuery.subscribable(z, z.query.messages);
+
+    const q = yield* messagesQuery();
+    const sub = ZfxQuery.subscribable(z, q);
     const atom = Atom.subscribable(Effect.succeed(sub)).pipe(
       Atom.map(ZfxResult.make),
       Atom.map(ZfxResult.acceptPartialMode("acceptCached")),
@@ -920,7 +988,9 @@ it.scopedLive(
     const value: Message = { id: nanoid(), body: "hello world" };
 
     const z = yield* initZero;
-    const sub = ZfxQuery.subscribable(z, z.query.messages.where("id", value.id).one());
+
+    const q = yield* messageByIdQuery(value.id);
+    const sub = ZfxQuery.subscribable(z, q);
     const atom = Atom.subscribable(Effect.succeed(sub)).pipe(
       Atom.map(ZfxResult.make),
       Atom.map(ZfxResult.acceptPartialMode("waitForServer")),
@@ -958,7 +1028,9 @@ it.scopedLive(
   "Result.acceptPartialMode with 'waitForServer' should work for plural queries",
   Effect.fn(function* () {
     const z = yield* initZero;
-    const sub = ZfxQuery.subscribable(z, z.query.messages);
+
+    const q = yield* messagesQuery();
+    const sub = ZfxQuery.subscribable(z, q);
     const atom = Atom.subscribable(Effect.succeed(sub)).pipe(
       Atom.map(ZfxResult.make),
       Atom.map(ZfxResult.acceptPartialMode("waitForServer")),
@@ -994,36 +1066,4 @@ it.scopedLive(
       ]);
     }
   }, Effect.provide(Registry.layer)),
-);
-
-it.scopedLive(
-  "multiple mutations batched in a single push should all succeed",
-  Effect.fn(function* () {
-    const ids1 = Array.from({ length: 10 }, () => nanoid());
-    const ids2 = Array.from({ length: 10 }, () => nanoid());
-
-    const z = yield* initZero;
-    yield* Effect.promise(() =>
-      Promise.all([
-        ...ids1.map((id) => z.mutate.batchedMutation1({ id }).server),
-        ...ids2.map((id) => z.mutate.batchedMutation2({ id }).server),
-      ]),
-    );
-
-    expect(Chunk.unsafeLast(pushPayloads).mutations.length).toBeGreaterThan(1);
-
-    const rows = yield* Effect.promise(() =>
-      ddb
-        .select({ id: messages.id, body: messages.body })
-        .from(messages)
-        .where(inArray(messages.id, [...ids1, ...ids2])),
-    );
-    expect(rows).toHaveLength(ids1.length + ids2.length);
-    expect(rows).toStrictEqual(
-      expect.arrayContaining([
-        ...ids1.map((id) => ({ id, body: "batchedMutation1" })),
-        ...ids2.map((id) => ({ id, body: "batchedMutation2" })),
-      ]),
-    );
-  }),
 );

@@ -1,5 +1,5 @@
 import { Result as AtomResult } from "@effect-atom/atom";
-import type { HumanReadable } from "@rocicorp/zero/react";
+import type { HumanReadable } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Fn from "effect/Function";

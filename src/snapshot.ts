@@ -2,8 +2,8 @@
 // https://github.com/rocicorp/mono/blob/30f209f2946b4cf2cd2dee459849351498f11308/packages/zero-react/src/use-query.tsx
 // https://github.com/rocicorp/mono/blob/30f209f2946b4cf2cd2dee459849351498f11308/packages/shared/src/deep-clone.ts#L4
 
-import type { JSONValue, ReadonlyJSONValue } from "@rocicorp/zero";
-import type { HumanReadable, QueryResult } from "@rocicorp/zero/react";
+import type { HumanReadable, JSONValue, ReadonlyJSONValue } from "@rocicorp/zero";
+import type { QueryResult } from "@rocicorp/zero/react";
 
 const emptyArray: unknown[] = [];
 
