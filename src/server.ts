@@ -205,12 +205,12 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
           );
           const exit = Effect.runSyncExitWith(ctx)(program);
-          return Exit.match(exit, {
-            onSuccess: (v) => v,
-            onFailure: (cause) => {
-              throw new QueryUserError<E>({ cause: cause as Cause.Cause<E | Schema.SchemaError | QueryNotFound> });
-            },
-          });
+          if (Exit.isFailure(exit)) {
+            throw new QueryUserError<E>({
+              cause: exit.cause as Cause.Cause<E | Schema.SchemaError | QueryNotFound>,
+            });
+          }
+          return exit.value;
         },
         schema,
         payload as ReadonlyJSONValue,
