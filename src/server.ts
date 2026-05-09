@@ -2,7 +2,6 @@ import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
 import { handleQueryRequest } from "@rocicorp/zero/server";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
-import * as Chunk from "effect/Chunk";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -79,7 +78,7 @@ export const processPush = Effect.fn(function* <
     Stream.runCollect,
   );
 
-  return { mutations: Chunk.toArray(responses) } satisfies Types.PushResponse;
+  return { mutations: responses } satisfies Types.PushResponse;
 });
 
 const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Types.Mutation) {
@@ -99,7 +98,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     Effect.catchTag("NoSuchElementError", () => Effect.fail(new MutatorNotFoundError({ name: mutation.name }))),
   );
 
-  const args = yield* Schema.decode(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
+  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
     Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
   );
 
