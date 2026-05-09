@@ -12,7 +12,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
-import * as Runtime from "effect/Runtime";
 import type * as ClientTransaction from "./client-transaction.js";
 import {
   MutationAlreadyProcessedError,
@@ -52,7 +51,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     );
 
   const execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-    const runtime = yield* Effect.runtime<
+    const ctx = yield* Effect.context<
       ServerTransactionInput | Exclude<R, ClientTransaction.ClientTransaction | ServerTransactionContext>
     >();
     const result = yield* Deferred.make<A, E | Effect.Effect.Error<typeof checkAndIncrementLastMutationId>>();
@@ -66,7 +65,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
               Layer.succeed(ServerTransactionContext, { transaction, transactionHooks }),
               Layer.succeed(clientTransaction, transaction),
             ]),
-            (effect) => Runtime.runPromiseExit(runtime, effect, { signal }),
+            (effect) => Effect.runPromiseExitWith(ctx)(effect, { signal }),
           );
           Deferred.unsafeDone(result, exit);
           return Exit.getOrElse(exit, () => {
