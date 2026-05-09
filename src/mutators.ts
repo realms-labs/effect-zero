@@ -70,13 +70,9 @@ export function make(schema: AnyMutatorSchemas, mutators: AnyMutatorFns): AnyMut
 
   return Rec.map(mutators, (v, name) => {
     return Match.value([v, schema[name]]).pipe(
-      Match.when([Predicate.isFunction, Schema.isSchema], ([mutator, schema]) =>
-        makeMutator(schema as AnyMutatorSchema, mutator as AnyMutatorFn),
-      ),
+      Match.when([Predicate.isFunction, Schema.isSchema], ([mutator, schema]) => makeMutator(schema, mutator)),
       Match.when([Predicate.isObject, Predicate.isObject], ([mutator, schema]) =>
-        Rec.map(mutator as Record<string, AnyMutatorFn>, (mutator, name) =>
-          makeMutator(Option.getOrThrow(Rec.get(schema as Record<string, AnyMutatorSchema>, name)), mutator),
-        ),
+        Rec.map(mutator, (mutator, name) => makeMutator(Option.getOrThrow(Rec.get(schema, name)), mutator)),
       ),
       Match.orElseAbsurd,
     );
