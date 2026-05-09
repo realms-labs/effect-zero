@@ -32,15 +32,15 @@ export const make = <
   R2,
 >(options: {
   name: N;
-  payload: Schema.Schema<B, A, R1>;
+  payload: Schema.Codec<B, A, R1, R1>;
   query: (args: NoInfer<B>) => Effect.Effect<ZeroQuery<T, S, R>, E, R2>;
 }) => {
   const runQuery = Effect.fn(function* (args: QueryArgs<A, B>) {
     const { encoded, decoded } = yield* Match.valueTags(args, {
       Encoded: ({ args: encoded }) =>
-        Effect.map(Schema.decode(options.payload)(encoded), (decoded) => ({ encoded, decoded })),
+        Effect.map(Schema.decodeEffect(options.payload)(encoded), (decoded) => ({ encoded, decoded })),
       Decoded: ({ args: decoded }) =>
-        Effect.map(Schema.encode(options.payload)(decoded), (encoded) => ({ encoded, decoded })),
+        Effect.map(Schema.encodeEffect(options.payload)(decoded), (encoded) => ({ encoded, decoded })),
     });
 
     return yield* options.query(decoded).pipe(
@@ -102,14 +102,14 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
             // TODO: Look into this. It seems like this is difficult but not impossible to model in the Effect paradigm.
             // Likely need some kind of stateful piece between the publisher and and subscriber, allowing the subscriber to swap out
             // the publisher when this function is called.
-            () => Effect.dieMessage("retry not available in `effect-zero`"),
+            () => Effect.die(new Error("retry not available in `effect-zero`")),
             error,
           );
         }),
       ),
       Stream.map(QueryResult.make),
     );
-  }).pipe(Stream.unwrapScoped);
+  }).pipe(Stream.unwrap);
 
 export const initialValue = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   query: ZeroQuery<T, S, R>,
