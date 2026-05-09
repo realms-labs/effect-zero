@@ -2,17 +2,14 @@ import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
 import { handleQueryRequest } from "@rocicorp/zero/server";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
-import * as Chunk from "effect/Chunk";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
-import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
@@ -60,7 +57,7 @@ export const processPush = Effect.fn(function* <
         }
 
         return yield* processMutation<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
-          Effect.catchAll((e) => processMutationError(transaction, e)),
+          Effect.catch((e: unknown) => processMutationError(transaction, e)),
           Effect.map((result) =>
             Types.MutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
           ),
@@ -81,28 +78,37 @@ export const processPush = Effect.fn(function* <
     Stream.runCollect,
   );
 
-  return { mutations: Chunk.toArray(responses) } satisfies Types.PushResponse;
+  return { mutations: responses } satisfies Types.PushResponse;
 });
 
 const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Types.Mutation) {
   // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
   const [namespace, name] = mutation.name.includes("|") ? Str.split(mutation.name, "|") : Str.split(mutation.name, ".");
 
-  const mutator = yield* Fn.pipe(
+  const mutatorOpt = Fn.pipe(
     mutators,
-    Rec.get<string>(namespace),
+    Rec.get<string>(namespace ?? ""),
     Option.flatMap((mutator) =>
-      Match.value([mutator, name]).pipe(
-        Match.when([Predicate.isRecord, Predicate.isString], ([mutator, name]) => Rec.get<string>(name)(mutator)),
-        Match.when([Predicate.isFunction, Predicate.isUndefined], ([mutator]) => Option.some(mutator)),
-        Match.orElse(() => Option.none()),
+      Match.value([mutator, name as string | undefined]).pipe(
+        Match.when([Predicate.isObject, Predicate.isString], ([mutator, name]) =>
+          Rec.get(mutator as Record<string, Mutators.AnyMutator<R>>, name),
+        ),
+        Match.when([Predicate.isFunction, Predicate.isUndefined], ([mutator]) =>
+          Option.some(mutator as Mutators.AnyMutator<R>),
+        ),
+        Match.orElse(() => Option.none<Mutators.AnyMutator<R>>()),
       ),
     ),
-    Effect.catchTag("NoSuchElementException", () => new MutatorNotFoundError({ name: mutation.name })),
   );
+  const mutator = yield* Option.match(mutatorOpt, {
+    onNone: () => Effect.fail(new MutatorNotFoundError({ name: mutation.name })),
+    onSome: (m) => Effect.succeed(m),
+  });
 
-  const args = yield* Schema.decode(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
-    Effect.catchTag("ParseError", (e) => new ServerArgsParseError({ cause: Cause.fail(e) })),
+  // Normalize JSON's `null` to `undefined` so `Schema.Void` validates the "no args" case.
+  const rawArg = mutation.args[0] === null ? undefined : mutation.args[0];
+  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(rawArg).pipe(
+    Effect.catch((e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
   );
 
   return yield* mutator(args).pipe(
@@ -120,7 +126,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     ),
     // Case #5 "Zero transactions then fail" / #6 "Fail before transaction"
     // Catches all errors that are produced before the transaction is executed
-    Effect.catchAllCause((cause) => new MutationUserError({ cause })),
+    Effect.catchCause((cause) => Effect.fail(new MutationUserError({ cause }))),
   );
 });
 
@@ -144,14 +150,15 @@ const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TT
 
   yield* transaction
     .execute(
-      Effect.flatMap(transaction, ({ transactionHooks }) => {
-        return Effect.tryPromise({
+      Effect.gen(function* () {
+        const { transactionHooks } = yield* transaction;
+        return yield* Effect.tryPromise({
           try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
           catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
         });
       }),
     )
-    .pipe(Effect.catchAllCause(Effect.logError));
+    .pipe(Effect.catchCause(Effect.logError));
 
   yield* Effect.logWarning(`Mutation ${mutationID} for client ${clientID} was retried after an error: ${e}`);
 
@@ -167,7 +174,7 @@ class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
 }> {}
 
 class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
-  readonly cause: Cause.Cause<ParseResult.ParseError>;
+  readonly cause: Cause.Cause<Schema.SchemaError>;
 }> {}
 
 const MutationUserErrorTypeId = Symbol.for(prefixId("MutationUserError"));
@@ -190,25 +197,29 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
   schema: ZeroSchema,
   payload: TransformRequestMessage,
 ) {
-  const runtime = yield* Effect.runtime<R1 | R2>();
+  const ctx = yield* Effect.context<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
       handleQueryRequest(
-        (name, args) =>
-          Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
-            Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ name })),
+        (name, args) => {
+          const program = Effect.fromOption(Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name)).pipe(
+            Effect.catch(() => Effect.fail(new QueryNotFound({ name }))),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
-            (effect) => Runtime.runSyncExit(runtime, effect),
-            Exit.getOrElse((cause) => {
-              throw new QueryUserError<E>({ cause });
-            }),
-          ),
+          );
+          const exit = Effect.runSyncExitWith(ctx)(program);
+          return Exit.match(exit, {
+            onSuccess: (v) => v,
+            onFailure: (cause) => {
+              throw new QueryUserError<E>({ cause: cause as Cause.Cause<E | Schema.SchemaError | QueryNotFound> });
+            },
+          });
+        },
         schema,
         payload as ReadonlyJSONValue,
       ),
     catch: (e) =>
       Option.liftPredicate(e, QueryUserError.is<E>).pipe(
-        Option.flatMap((e) => Cause.failureOption(e.cause)),
+        Option.flatMap((e) => Cause.findErrorOption(e.cause)),
         Option.getOrElse(() => new QueryRequestError({ cause: Cause.fail(e) })),
       ),
   });
@@ -222,7 +233,7 @@ class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> 
 
 const QueryUserErrorTypeId = Symbol.for(prefixId("QueryUserError"));
 class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{
-  cause: Cause.Cause<E | ParseResult.ParseError | QueryNotFound>;
+  cause: Cause.Cause<E | Schema.SchemaError | QueryNotFound>;
 }> {
   readonly [QueryUserErrorTypeId] = QueryUserErrorTypeId;
   static is<E>(e: unknown): e is QueryUserError<E> {

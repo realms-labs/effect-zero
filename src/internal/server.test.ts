@@ -15,7 +15,8 @@ describe("ServerSynchronizationContext", () => {
       );
       Exit.match(result, {
         onSuccess: () => expect.fail("Expected failure"),
-        onFailure: (cause) => expect(cause).toStrictEqual(Cause.fail(new NoTransactionError())),
+        onFailure: (cause) =>
+          expect(Cause.findErrorOption(cause)).toEqual(Cause.findErrorOption(Cause.fail(new NoTransactionError()))),
       });
     }),
   );

@@ -1,4 +1,3 @@
-import { Result as AtomResult } from "@effect-atom/atom";
 import type { HumanReadable } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
@@ -7,14 +6,15 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Struct from "effect/Struct";
+import { AsyncResult as AtomResult } from "effect/unstable/reactivity";
 import type { QueryResult } from "./internal/query-result.js";
 
 /*
 ### Introduction
 
-When using effect-atom with effect-zero, you will often have atoms which contain a type in the form of
+When using `effect/unstable/reactivity` (atoms) with effect-zero, you will often have atoms which contain a type in the form of
 
-`@effect-atom/atom`.Result<`@rocicorp/zero/react`.QueryResult<A>, E>
+`AsyncResult<QueryResult<A>, E>`
 
 However, such a type is not easy to work with.
 The purpose of `effect-zero`.Result is to provide a more convenient type for this use case.
@@ -22,8 +22,8 @@ The purpose of `effect-zero`.Result is to provide a more convenient type for thi
 ### Background
 
 To start, let's analyze the possible states of the original type:
-- The outer `@effect-atom/atom`.Result may be `Initial<_, _>`, `Failure<_, E>`, or `Success<QueryResult, _>`.
-- The inner `@rocicorp/zero/react`.QueryResult may be `unknown<A>`, `complete<A>`, or `error`.
+- The outer `AsyncResult` may be `Initial<_, _>`, `Failure<_, E>`, or `Success<QueryResult, _>`.
+- The inner `QueryResult` may be `unknown<A>`, `complete<A>`, or `error`.
 
 This means that there are 5 total possible states:
 - Initial, representing the state before the query has been executed on either the client or the server.
@@ -43,12 +43,15 @@ On the other hand, `effect-zero`.Result has the following states:
 
 This has a few key benefits:
 - It allows you to deal with errors in a more streamlined way, as now all error states are represented as a `Failure(E | QueryError)`,
-  thus you can use the builtin facilities of `effect-atom`.Result to work with the possible error states.
+  thus you can use the builtin facilities of `AsyncResult` to work with the possible error states.
 - We provide a method `acceptPartialMode` which allows for simplifying the type further by specifying the situations in which you want to accept
   partial results, resulting a further simplified type of `Initial | Success(A) | Failure(E | QueryError)`.
 */
 
-export type Result<A, E = never> = AtomResult.Result<QueryResult.Partial<A> | QueryResult.Complete<A>, E | QueryError>;
+export type Result<A, E = never> = AtomResult.AsyncResult<
+  QueryResult.Partial<A> | QueryResult.Complete<A>,
+  E | QueryError
+>;
 export namespace Result {
   export type Initial<A, E = never> = AtomResult.Initial<
     QueryResult.Partial<A> | QueryResult.Complete<A>,
@@ -72,17 +75,20 @@ export class QueryError extends Data.TaggedError("QueryError")<{
   readonly details: QueryResult.Error["details"];
 }> {}
 
-export const make = <A, E>(value: AtomResult.Result<QueryResult<A>, E>): Result<A, E> =>
-  Match.valueTags(value, {
-    Initial: () => AtomResult.initial(),
-    Success: ({ value }) =>
+export const make = <A, E>(value: AtomResult.AsyncResult<QueryResult<A>, E>): Result<A, E> => {
+  type Inner = QueryResult.Partial<A> | QueryResult.Complete<A>;
+  type Err = E | QueryError;
+  return Match.valueTags(value, {
+    Initial: (): Result<A, E> => AtomResult.initial<Inner, Err>(),
+    Success: ({ value }): Result<A, E> =>
       Match.valueTags(value, {
-        Partial: (value) => AtomResult.success(value),
-        Complete: (value) => AtomResult.success(value),
-        Error: (e) => AtomResult.failure(Cause.fail(new QueryError(e))),
+        Partial: (v): Result<A, E> => AtomResult.success<Inner, Err>(v),
+        Complete: (v): Result<A, E> => AtomResult.success<Inner, Err>(v),
+        Error: (e): Result<A, E> => AtomResult.failure<Inner, Err>(Cause.fail(new QueryError(e))),
       }),
-    Failure: (e) => AtomResult.failure(e.cause),
+    Failure: (e): Result<A, E> => AtomResult.failure<Inner, Err>(e.cause),
   });
+};
 
 // based on: https://github.com/tim-smart/effect-atom/blob/04c15cacda42dd230782f52c0e978400793a502c/packages/atom/src/Result.ts#L424
 export const match: {
@@ -151,7 +157,7 @@ export const acceptPartialWith: {
         ? AtomResult.initial<HumanReadable<A>, E>(success.waiting)
         : mapSuccess(success, Struct.get("value")),
     onFailure: (failure) =>
-      AtomResult.failure<E | QueryError, HumanReadable<A>>(failure.cause, {
+      AtomResult.failure<HumanReadable<A>, E | QueryError>(failure.cause, {
         waiting: failure.waiting,
         previousSuccess: failure.previousSuccess.pipe(
           Option.flatMap((success) =>
