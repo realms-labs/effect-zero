@@ -60,7 +60,7 @@ export const processPush = Effect.fn(function* <
         }
 
         return yield* processMutation<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
-          Effect.catchAll((e) => processMutationError(transaction, e)),
+          Effect.catch((e) => processMutationError(transaction, e)),
           Effect.map((result) =>
             Types.MutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
           ),
@@ -98,11 +98,11 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
         Match.orElse(() => Option.none()),
       ),
     ),
-    Effect.catchTag("NoSuchElementException", () => new MutatorNotFoundError({ name: mutation.name })),
+    Effect.catchTag("NoSuchElementError", () => Effect.fail(new MutatorNotFoundError({ name: mutation.name }))),
   );
 
   const args = yield* Schema.decode(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
-    Effect.catchTag("ParseError", (e) => new ServerArgsParseError({ cause: Cause.fail(e) })),
+    Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
   );
 
   return yield* mutator(args).pipe(
@@ -120,7 +120,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     ),
     // Case #5 "Zero transactions then fail" / #6 "Fail before transaction"
     // Catches all errors that are produced before the transaction is executed
-    Effect.catchAllCause((cause) => new MutationUserError({ cause })),
+    Effect.catchCause((cause) => Effect.fail(new MutationUserError({ cause }))),
   );
 });
 
@@ -151,7 +151,7 @@ const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TT
         });
       }),
     )
-    .pipe(Effect.catchAllCause(Effect.logError));
+    .pipe(Effect.catchCause(Effect.logError));
 
   yield* Effect.logWarning(`Mutation ${mutationID} for client ${clientID} was retried after an error: ${e}`);
 
@@ -196,7 +196,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
       handleQueryRequest(
         (name, args) =>
           Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
-            Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ name })),
+            Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
             (effect) => Runtime.runSyncExit(runtime, effect),
             Exit.getOrElse((cause) => {

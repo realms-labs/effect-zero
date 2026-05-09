@@ -30,7 +30,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
       const exit = await Schema.decode(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
-        Effect.catchTag("ParseError", (e) => new ClientArgsParseError({ cause: Cause.fail(e) })),
+        Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction, tx),
         Runtime.runPromiseExit(runtime),
