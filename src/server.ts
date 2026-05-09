@@ -90,7 +90,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     Rec.get<string>(namespace),
     Option.flatMap((mutator) =>
       Match.value([mutator, name]).pipe(
-        Match.when([Predicate.isRecord, Predicate.isString], ([mutator, name]) => Rec.get<string>(name)(mutator)),
+        Match.when([Predicate.isObject, Predicate.isString], ([mutator, name]) => Rec.get<string>(name)(mutator)),
         Match.when([Predicate.isFunction, Predicate.isUndefined], ([mutator]) => Option.some(mutator)),
         Match.orElse(() => Option.none()),
       ),
@@ -205,7 +205,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
       ),
     catch: (e) =>
       Option.liftPredicate(e, QueryUserError.is<E>).pipe(
-        Option.flatMap((e) => Cause.failureOption(e.cause)),
+        Option.flatMap((e) => Cause.findErrorOption(e.cause)),
         Option.getOrElse(() => new QueryRequestError({ cause: Cause.fail(e) })),
       ),
   });

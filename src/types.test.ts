@@ -163,7 +163,7 @@ describe("Type tests", () => {
       const serverEffect = Server.processPush(serverTransaction, mutators, {} as any, {} as any);
 
       // Server effect should require both NestedDummyTag and NestedDummyTag2
-      expectTypeOf<Effect.Effect.Context<typeof serverEffect>>().toEqualTypeOf<NestedDummyTag | NestedDummyTag2>();
+      expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<NestedDummyTag | NestedDummyTag2>();
     });
 
     it("mutator requirements should propagate", () => {
@@ -195,7 +195,7 @@ describe("Type tests", () => {
       const serverEffect = Server.processPush(serverTransaction, mutators, {} as any, {} as any);
 
       // Server effect should require both DummyTag and DummyTag2
-      expectTypeOf<Effect.Effect.Context<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
+      expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
     });
 
     it("processPush has no extra requirements when mutators have none", () => {
@@ -212,7 +212,7 @@ describe("Type tests", () => {
 
       const effect = Server.processPush(serverTransaction, mutators, {} as any, {} as any);
 
-      expectTypeOf<Effect.Effect.Context<typeof effect>>().toEqualTypeOf<never>();
+      expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
     });
   });
 

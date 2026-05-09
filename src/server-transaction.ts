@@ -54,20 +54,20 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     const ctx = yield* Effect.context<
       ServerTransactionInput | Exclude<R, ClientTransaction.ClientTransaction | ServerTransactionContext>
     >();
-    const result = yield* Deferred.make<A, E | Effect.Effect.Error<typeof checkAndIncrementLastMutationId>>();
+    const result = yield* Deferred.make<A, E | Effect.Error<typeof checkAndIncrementLastMutationId>>();
 
     const transactionInput = yield* ServerTransactionInput;
     yield* Effect.tryPromise({
       try: (signal) =>
         database.transaction(async (transaction, transactionHooks) => {
-          const exit = await Effect.zipRight(checkAndIncrementLastMutationId, effect).pipe(
+          const exit = await Effect.flatMap(checkAndIncrementLastMutationId, () => effect).pipe(
             Effect.provide([
               Layer.succeed(ServerTransactionContext, { transaction, transactionHooks }),
               Layer.succeed(clientTransaction, transaction),
             ]),
             (effect) => Effect.runPromiseExitWith(ctx)(effect, { signal }),
           );
-          Deferred.unsafeDone(result, exit);
+          Deferred.doneUnsafe(result, exit);
           return Exit.getOrElse(exit, () => {
             // This error's purpose is to differentiate between "external" errors
             // that originate from the user-defined mutator code and "internal" errors
@@ -89,7 +89,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
       },
     }).pipe(Effect.catchTag("ServerTransactionUserError", () => Effect.void));
 
-    return yield* result;
+    return yield* Deferred.await(result);
   }, ServerSynchronizationContext.guard);
 
   const checkAndIncrementLastMutationId = Effect.gen(function* () {
