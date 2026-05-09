@@ -39,18 +39,18 @@ const ParseErroredQuery = Schema.Struct({
   details: Schema.optional(JsonSchema),
 });
 
-const ErroredQuery = Schema.Union(AppErroredQuery, ParseErroredQuery);
+const ErroredQuery = Schema.Union([AppErroredQuery, ParseErroredQuery]);
 
-const TransformResponseBody = Schema.Array(Schema.Union(TransformedQuery, ErroredQuery));
+const TransformResponseBody = Schema.Array(Schema.Union([TransformedQuery, ErroredQuery]));
 
-export const TransformRequestMessage = Schema.Tuple(Schema.Literal("transform"), TransformRequestBody);
+export const TransformRequestMessage = Schema.Tuple([Schema.Literal("transform"), TransformRequestBody]);
 export type TransformRequestMessage = typeof TransformRequestMessage.Type;
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
-const TransformErrorMessage = Schema.Tuple(Schema.Literal("transformError"), Schema.Array(ErroredQuery));
+const TransformErrorMessage = Schema.Tuple([Schema.Literal("transformError"), Schema.Array(ErroredQuery)]);
 
-const TransformFailedMessage = Schema.Tuple(Schema.Literal("transformFailed"), TransformFailedBody);
+const TransformFailedMessage = Schema.Tuple([Schema.Literal("transformFailed"), TransformFailedBody]);
 
-const TransformOkMessage = Schema.Tuple(Schema.Literal("transformed"), TransformResponseBody);
+const TransformOkMessage = Schema.Tuple([Schema.Literal("transformed"), TransformResponseBody]);
 
-export const TransformResponseMessage = Schema.Union(TransformOkMessage, TransformFailedMessage);
+export const TransformResponseMessage = Schema.Union([TransformOkMessage, TransformFailedMessage]);

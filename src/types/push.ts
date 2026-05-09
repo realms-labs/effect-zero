@@ -7,12 +7,12 @@ import { PushFailedBody } from "./error.js";
 
 const PrimaryKey = Schema.Array(Schema.String);
 
-const PrimaryKeyValue = Schema.Union(Schema.String, Schema.Number, Schema.Boolean);
+const PrimaryKeyValue = Schema.Union([Schema.String, Schema.Number, Schema.Boolean]);
 
-const PrimaryKeyValueRecord = Schema.Record({ key: Schema.String, value: PrimaryKeyValue });
+const PrimaryKeyValueRecord = Schema.Record(Schema.String, PrimaryKeyValue);
 
-const Value = Schema.Union(JsonSchema, Schema.Undefined);
-const Row = Schema.Record({ key: Schema.String, value: Value });
+const Value = Schema.Union([JsonSchema, Schema.Undefined]);
+const Row = Schema.Record(Schema.String, Value);
 
 const CRUD_MUTATION_NAME = "_zero_crud";
 
@@ -20,7 +20,7 @@ const CRUD_MUTATION_NAME = "_zero_crud";
 const CLEANUP_RESULTS_MUTATION_NAME = "_zero_cleanupResults";
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
-const CleanupResultsArg = Schema.Union(
+const CleanupResultsArg = Schema.Union([
   // Legacy format (no type field) - treat as single
   Schema.Struct({
     clientGroupID: Schema.String,
@@ -40,7 +40,7 @@ const CleanupResultsArg = Schema.Union(
     clientGroupID: Schema.String,
     clientIDs: Schema.NonEmptyArray(Schema.String),
   }),
-);
+]);
 
 /**
  * Inserts if entity with id does not already exist.
@@ -85,13 +85,13 @@ const DeleteOp = Schema.Struct({
   value: PrimaryKeyValueRecord,
 });
 
-const CrudOp = Schema.Union(InsertOp, UpsertOp, UpdateOp, DeleteOp);
+const CrudOp = Schema.Union([InsertOp, UpsertOp, UpdateOp, DeleteOp]);
 
 const CrudArg = Schema.Struct({
   ops: Schema.Array(CrudOp),
 });
 
-const CrudArgs = Schema.Tuple(CrudArg);
+const CrudArgs = Schema.Tuple([CrudArg]);
 
 const CrudMutation = Schema.Struct({
   type: Schema.Literal("crud"),
@@ -111,7 +111,7 @@ const CustomMutation = Schema.Struct({
   timestamp: Schema.Number,
 });
 
-export const Mutation = Schema.Union(CrudMutation, CustomMutation);
+export const Mutation = Schema.Union([CrudMutation, CustomMutation]);
 export type Mutation = typeof Mutation.Type;
 
 export const PushBody = Schema.Struct({
@@ -133,7 +133,7 @@ export const PushBody = Schema.Struct({
 export type PushBody = typeof PushBody.Type;
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
-const PushMessage = Schema.Tuple(Schema.Literal("push"), PushBody);
+const PushMessage = Schema.Tuple([Schema.Literal("push"), PushBody]);
 
 const MutationId = Schema.Struct({
   id: Schema.Number,
@@ -150,11 +150,11 @@ export const AppError = Schema.Struct({
 export type AppError = typeof AppError.Type;
 
 export const ZeroError = Schema.Struct({
-  error: Schema.Union(
+  error: Schema.Literals([
     /** @deprecated push oooMutation errors are now represented as ['error', { ... }] messages */
-    Schema.Literal("oooMutation"),
-    Schema.Literal("alreadyProcessed"),
-  ),
+    "oooMutation",
+    "alreadyProcessed",
+  ]),
   details: Schema.optional(JsonSchema),
 });
 
@@ -165,13 +165,13 @@ const MutationOk = Schema.Struct({
   data: Schema.optional(JsonSchema),
 });
 
-const MutationError = Schema.Union(AppError, ZeroError);
+const MutationError = Schema.Union([AppError, ZeroError]);
 
-export const MutationResult = Schema.Union(
+export const MutationResult = Schema.Union([
   // We flip the original order here as otherwise values of type MutationError would get parsed as MutationOk with empty `data`
   MutationError,
   MutationOk,
-);
+]);
 export type MutationResult = typeof MutationResult.Type;
 
 export const MutationResponse = Schema.Struct({
@@ -233,18 +233,18 @@ const ZeroPusherError = Schema.Struct({
 /**
  * @deprecated push errors are now represented as ['error', { ... }] messages
  */
-const PushError = Schema.Union(UnsupportedPushVersion, UnsupportedSchemaVersion, HttpError, ZeroPusherError);
+const PushError = Schema.Union([UnsupportedPushVersion, UnsupportedSchemaVersion, HttpError, ZeroPusherError]);
 
-const PushResponseBody = Schema.Union(PushOk, PushError);
+const PushResponseBody = Schema.Union([PushOk, PushError]);
 
-export const PushResponse = Schema.Union(PushResponseBody, PushFailedBody);
+export const PushResponse = Schema.Union([PushResponseBody, PushFailedBody]);
 export type PushResponse = typeof PushResponse.Type;
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
-const PushResponseMessage = Schema.Tuple(Schema.Literal("pushResponse"), PushResponseBody);
+const PushResponseMessage = Schema.Tuple([Schema.Literal("pushResponse"), PushResponseBody]);
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
-const AckMutationResponsesMessage = Schema.Tuple(Schema.Literal("ackMutationResponses"), MutationId);
+const AckMutationResponsesMessage = Schema.Tuple([Schema.Literal("ackMutationResponses"), MutationId]);
 
 /**
  * The schema for the querystring parameters of the custom push endpoint.
