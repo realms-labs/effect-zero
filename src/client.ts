@@ -4,10 +4,8 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Match from "effect/Match";
-import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import type * as ClientTransaction from "./client-transaction.js";
 import * as Mutators from "./mutators.js";
@@ -22,8 +20,8 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
   mutators: TMutators,
   options: Omit<ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>, "schema" | "mutators">,
 ) {
-  const runtime =
-    yield* Effect.runtime<
+  const ctx =
+    yield* Effect.context<
       Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, ClientTransaction.ClientTransaction>
     >();
 
@@ -33,7 +31,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
         Effect.catchTag("ParseError", (e) => new ClientArgsParseError({ cause: Cause.fail(e) })),
         Effect.flatMap(mutator),
         Effect.provideService(transaction, tx),
-        Runtime.runPromiseExit(runtime),
+        Effect.runPromiseExitWith(ctx),
       );
       return Exit.getOrElse(exit, (c) => {
         // Extract underlying error bypassing FiberFailure
@@ -62,7 +60,7 @@ type UnwrapMutator<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMut
   ? (transaction: ZeroTransaction<TSchema>) => Promise<void>
   : (
       transaction: ZeroTransaction<TSchema>,
-      args: Schema.Schema.Encoded<TMutators[typeof Mutators.MutatorSchemaSymbol]>,
+      args: Schema.Codec.Encoded<TMutators[typeof Mutators.MutatorSchemaSymbol]>,
     ) => Promise<void>;
 
 type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators> = {
@@ -76,5 +74,5 @@ type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMu
 } & {};
 
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
-  readonly cause: Cause.Cause<ParseResult.ParseError>;
+  readonly cause: Cause.Cause<Schema.SchemaError>;
 }> {}

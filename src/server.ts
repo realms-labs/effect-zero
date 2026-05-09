@@ -9,10 +9,8 @@ import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
-import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
@@ -167,7 +165,7 @@ class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
 }> {}
 
 class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
-  readonly cause: Cause.Cause<ParseResult.ParseError>;
+  readonly cause: Cause.Cause<Schema.SchemaError>;
 }> {}
 
 const MutationUserErrorTypeId = Symbol.for(prefixId("MutationUserError"));
@@ -190,7 +188,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
   schema: ZeroSchema,
   payload: TransformRequestMessage,
 ) {
-  const runtime = yield* Effect.runtime<R1 | R2>();
+  const ctx = yield* Effect.context<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
       handleQueryRequest(
@@ -198,7 +196,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
           Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
             Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ name })),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
-            (effect) => Runtime.runSyncExit(runtime, effect),
+            (effect) => Effect.runSyncExitWith(ctx)(effect),
             Exit.getOrElse((cause) => {
               throw new QueryUserError<E>({ cause });
             }),
@@ -222,7 +220,7 @@ class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> 
 
 const QueryUserErrorTypeId = Symbol.for(prefixId("QueryUserError"));
 class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{
-  cause: Cause.Cause<E | ParseResult.ParseError | QueryNotFound>;
+  cause: Cause.Cause<E | Schema.SchemaError | QueryNotFound>;
 }> {
   readonly [QueryUserErrorTypeId] = QueryUserErrorTypeId;
   static is<E>(e: unknown): e is QueryUserError<E> {
