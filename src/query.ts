@@ -102,7 +102,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
             // TODO: Look into this. It seems like this is difficult but not impossible to model in the Effect paradigm.
             // Likely need some kind of stateful piece between the publisher and and subscriber, allowing the subscriber to swap out
             // the publisher when this function is called.
-            () => Effect.die(new Error("retry not available in `effect-zero`")),
+            () => Effect.die("retry not available in `effect-zero`"),
             error,
           );
         }),
