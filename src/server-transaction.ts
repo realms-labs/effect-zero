@@ -68,15 +68,18 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
             (effect) => Effect.runPromiseExitWith(ctx)(effect, { signal }),
           );
           Deferred.doneUnsafe(result, exit);
-          return Exit.getOrElse(exit, () => {
-            // This error's purpose is to differentiate between "external" errors
-            // that originate from the user-defined mutator code and "internal" errors
-            // that originate from our own code and the Zero API.
-            // Both types are caught in the "catch" block below, but at this point we only need to handle
-            // the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
-            // are already covered by passing the Exit result to the Deferred, which is why
-            // we have the ServerTransactionUserError silenced below in the pipe.
-            throw new ServerTransactionUserError();
+          return Exit.match(exit, {
+            onSuccess: (v) => v,
+            onFailure: () => {
+              // This error's purpose is to differentiate between "external" errors
+              // that originate from the user-defined mutator code and "internal" errors
+              // that originate from our own code and the Zero API.
+              // Both types are caught in the "catch" block below, but at this point we only need to handle
+              // the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
+              // are already covered by passing the Exit result to the Deferred, which is why
+              // we have the ServerTransactionUserError silenced below in the pipe.
+              throw new ServerTransactionUserError();
+            },
           });
         }, transactionInput),
       catch: (error) => {
