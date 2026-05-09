@@ -20,11 +20,11 @@ const PushFailedBase = Schema.Struct({
   message: Schema.String,
 });
 
-export const PushFailedBody = Schema.Union(
+export const PushFailedBody = Schema.Union([
   Schema.Struct({
     ...PushFailedBase.fields,
     origin: Schema.Literal("server"),
-    reason: Schema.Literal("database", "parse", "oooMutation", "unsupportedPushVersion", "internal"),
+    reason: Schema.Literals(["database", "parse", "oooMutation", "unsupportedPushVersion", "internal"]),
   }),
   Schema.Struct({
     ...PushFailedBase.fields,
@@ -36,9 +36,9 @@ export const PushFailedBody = Schema.Union(
   Schema.Struct({
     ...PushFailedBase.fields,
     origin: Schema.Literal("zeroCache"),
-    reason: Schema.Literal("timeout", "parse", "internal"),
+    reason: Schema.Literals(["timeout", "parse", "internal"]),
   }),
-);
+]);
 
 const TransformFailedBase = Schema.Struct({
   kind: Schema.Literal("TransformFailed"),
@@ -50,11 +50,11 @@ const TransformFailedBase = Schema.Struct({
   message: Schema.String,
 });
 
-export const TransformFailedBody = Schema.Union(
+export const TransformFailedBody = Schema.Union([
   Schema.Struct({
     ...TransformFailedBase.fields,
     origin: Schema.Literal("server"),
-    reason: Schema.Literal("database", "parse", "internal"),
+    reason: Schema.Literals(["database", "parse", "internal"]),
   }),
   Schema.Struct({
     ...TransformFailedBase.fields,
@@ -66,6 +66,6 @@ export const TransformFailedBody = Schema.Union(
   Schema.Struct({
     ...TransformFailedBase.fields,
     origin: Schema.Literal("zeroCache"),
-    reason: Schema.Literal("timeout", "parse", "internal"),
+    reason: Schema.Literals(["timeout", "parse", "internal"]),
   }),
-);
+]);
