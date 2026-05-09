@@ -305,13 +305,13 @@ describe("Type tests", () => {
     it("MakeQueryResult should be satisfied by query results", () => {
       const query1 = Query.make({
         name: "q1",
-        payload: Schema.Tuple(Schema.String),
+        payload: Schema.Tuple([Schema.String]),
         query: () => Effect.succeed(makeMockQuery()),
       });
 
       const query2 = Query.make({
         name: "q2",
-        payload: Schema.Tuple(),
+        payload: Schema.Tuple([]),
         query: () => Effect.succeed(makeMockQuery()),
       });
 
