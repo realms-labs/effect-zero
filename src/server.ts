@@ -102,7 +102,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
   );
 
   const args = yield* Schema.decode(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
-    Effect.mapError((e) => new ServerArgsParseError({ cause: Cause.fail(e) })),
+    Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
   );
 
   return yield* mutator(args).pipe(
