@@ -2,29 +2,33 @@ import type { TransactionProviderInput } from "@rocicorp/zero/server";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { prefixId } from "./utils.js";
 
-export class ServerTransactionInput extends Context.Tag(prefixId("ServerTransactionInput"))<
+export class ServerTransactionInput extends Context.Service<
   ServerTransactionInput,
   TransactionProviderInput
->() {}
+>()(prefixId("ServerTransactionInput")) {}
 
-export class ServerSynchronizationContext extends Effect.Service<ServerSynchronizationContext>()(
-  prefixId("ServerSynchronizationContext"),
-  {
-    effect: Effect.gen(function* () {
-      return {
-        wasTransactionExecuted: yield* SynchronizedRef.make(false),
-      };
-    }),
-  },
-) {
+export class ServerSynchronizationContext extends Context.Service<
+  ServerSynchronizationContext,
+  { readonly wasTransactionExecuted: SynchronizedRef.SynchronizedRef<boolean> }
+>()(prefixId("ServerSynchronizationContext"), {
+  make: Effect.gen(function* () {
+    return {
+      wasTransactionExecuted: yield* SynchronizedRef.make(false),
+    };
+  }),
+}) {
+  static readonly Default = Layer.effect(ServerSynchronizationContext, ServerSynchronizationContext.make);
+
   // Ensures that only one transaction is executed at a time and checks that another transaction wasn't already executed.
   static guard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.flatMap(this, (ctx) =>
-      SynchronizedRef.modifyEffect(
+    Effect.gen(function* () {
+      const ctx = yield* ServerSynchronizationContext;
+      return yield* SynchronizedRef.modifyEffect(
         ctx.wasTransactionExecuted,
         Effect.fn(function* (wasTransactionExecuted) {
           if (wasTransactionExecuted) {
@@ -33,12 +37,12 @@ export class ServerSynchronizationContext extends Effect.Service<ServerSynchroni
           const result = yield* effect;
           return [result, true];
         }),
-      ),
-    );
+      );
+    });
 
   static finalize = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.gen(this, function* () {
-      const wasTransactionExecuted = yield* this.pipe(Effect.map((ctx) => ctx.wasTransactionExecuted));
+    Effect.gen(function* () {
+      const { wasTransactionExecuted } = yield* ServerSynchronizationContext;
 
       return yield* effect.pipe(
         // Case #2 "One transaction then fail"
