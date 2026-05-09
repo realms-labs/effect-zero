@@ -4,12 +4,21 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
 import * as Match from "effect/Match";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Subscribable from "effect/Subscribable";
 import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
+
+/**
+ * Local replacement for `effect/Subscribable` (removed in Effect v4).
+ * Models a current value with a stream of changes.
+ */
+export interface Subscribable<A> {
+  readonly get: Effect.Effect<A>;
+  readonly changes: Stream.Stream<A>;
+}
 
 // biome-ignore lint/suspicious/noConfusingVoidType: necessary to allow Schema.Void
 type QueryArgs<A extends ReadonlyJSONValue | void, B> = { _tag: "Encoded"; args: A } | { _tag: "Decoded"; args: B };
@@ -88,8 +97,10 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
       (view) => Effect.sync(() => view.destroy()),
     );
 
-    return Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
-      Effect.sync(() => view.addListener((...args) => emit.single(args))),
+    type ListenerArgs = Parameters<Parameters<(typeof view)["addListener"]>[0]>;
+
+    return Stream.callback<ListenerArgs>((queue) =>
+      Effect.sync(() => view.addListener((...args) => Queue.offerUnsafe(queue, args as ListenerArgs))),
     ).pipe(
       Stream.mapEffect(([data, resultType, error]) =>
         Effect.sync(() => {
@@ -118,11 +129,9 @@ export const initialValue = <T extends keyof S["tables"] & string, S extends Zer
 export const subscribable = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   zero: Zero<S>,
   query: ZeroQuery<T, S, R>,
-) => {
-  return Subscribable.make({
-    get: Effect.promise(() => zero.run(query, { type: "unknown" })).pipe(
-      Effect.map((value) => ({ _tag: "Partial", value }) satisfies QueryResult.QueryResult.Partial<R>),
-    ),
-    changes: stream(zero, query),
-  });
-};
+): Subscribable<QueryResult.QueryResult<R>> => ({
+  get: Effect.promise(() => zero.run(query, { type: "unknown" })).pipe(
+    Effect.map((value) => ({ _tag: "Partial", value }) satisfies QueryResult.QueryResult.Partial<R>),
+  ),
+  changes: stream(zero, query),
+});
