@@ -196,7 +196,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
           Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
             Effect.catchTag("NoSuchElementException", () => new QueryNotFound({ name })),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
-            (effect) => Effect.runSyncExitWith(ctx)(effect),
+            Effect.runSyncExitWith(ctx),
             Exit.getOrElse((cause) => {
               throw new QueryUserError<E>({ cause });
             }),
