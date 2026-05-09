@@ -77,11 +77,11 @@ export class QueryError extends Data.TaggedError("QueryError")<{
 
 export const make = <A, E>(value: AsyncResult.AsyncResult<QueryResult<A>, E>): Result<A, E> =>
   Match.valueTags(value, {
-    Initial: (): Result<A, E> => AsyncResult.initial(),
-    Success: ({ value }): Result<A, E> =>
+    Initial: () => AsyncResult.initial(),
+    Success: ({ value }) =>
       Match.valueTags(value, {
-        Partial: (value): Result<A, E> => AsyncResult.success(value),
-        Complete: (value): Result<A, E> => AsyncResult.success(value),
+        Partial: (value) => AsyncResult.success(value),
+        Complete: (value) => AsyncResult.success(value),
         Error: (e): Result<A, E> => AsyncResult.failure(Cause.fail(new QueryError(e))),
       }),
     Failure: (e): Result<A, E> => AsyncResult.failure(e.cause),
