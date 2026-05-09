@@ -27,15 +27,20 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
-      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
+      // Normalize JSON's `null` to `undefined` so `Schema.Void` validates the "no args" case.
+      const input = args === null ? undefined : args;
+      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(input).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction, tx),
         Effect.runPromiseExitWith(ctx),
       );
-      return Exit.getOrElse(exit, (c) => {
-        // Extract underlying error bypassing FiberFailure
-        throw Cause.squash(c);
+      return Exit.match(exit, {
+        onSuccess: (v) => v,
+        onFailure: (c) => {
+          // Extract underlying error bypassing FiberFailure
+          throw Cause.squash(c);
+        },
       });
     };
   }
