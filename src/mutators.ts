@@ -15,7 +15,7 @@ export type AnyMutatorFns<R = any> = {
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
-export type AnyMutatorSchema = Schema.Schema<any, any, never>;
+export type AnyMutatorSchema = Schema.Codec<any, any>;
 export type AnyMutatorSchemas = Record<string, AnyMutatorSchema | Record<string, AnyMutatorSchema>>;
 
 export type MutatorFns<TSchema extends AnyMutatorSchemas> = {
@@ -70,9 +70,13 @@ export function make(schema: AnyMutatorSchemas, mutators: AnyMutatorFns): AnyMut
 
   return Rec.map(mutators, (v, name) => {
     return Match.value([v, schema[name]]).pipe(
-      Match.when([Predicate.isFunction, Schema.isSchema], ([mutator, schema]) => makeMutator(schema, mutator)),
-      Match.when([Predicate.isRecord, Predicate.isRecord], ([mutator, schema]) =>
-        Rec.map(mutator, (mutator, name) => makeMutator(Option.getOrThrow(Rec.get(schema, name)), mutator)),
+      Match.when([Predicate.isFunction, Schema.isSchema], ([mutator, schema]) =>
+        makeMutator(schema as AnyMutatorSchema, mutator as AnyMutatorFn),
+      ),
+      Match.when([Predicate.isObject, Predicate.isObject], ([mutator, schema]) =>
+        Rec.map(mutator as Record<string, AnyMutatorFn>, (mutator, name) =>
+          makeMutator(Option.getOrThrow(Rec.get(schema as Record<string, AnyMutatorSchema>, name)), mutator),
+        ),
       ),
       Match.orElseAbsurd,
     );
