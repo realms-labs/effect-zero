@@ -45,7 +45,7 @@ export class ServerSynchronizationContext extends Effect.Service<ServerSynchroni
         // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
         Effect.catchAllCause(
           Effect.fn(function* (e) {
-            if (yield* wasTransactionExecuted) {
+            if (yield* SynchronizedRef.get(wasTransactionExecuted)) {
               return yield* Effect.logError("Error occurred after transaction execution completed", e);
             }
             return yield* Effect.failCause(e);
@@ -55,7 +55,7 @@ export class ServerSynchronizationContext extends Effect.Service<ServerSynchroni
         // Check that the transaction was executed during the mutation
         Effect.tap(
           Effect.gen(function* () {
-            if (!(yield* wasTransactionExecuted)) {
+            if (!(yield* SynchronizedRef.get(wasTransactionExecuted))) {
               return yield* new NoTransactionError();
             }
           }),
