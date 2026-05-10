@@ -44,29 +44,19 @@ type ServerTransactionService<
   `${Id}/ServerTransactionContext`,
   ServerTransactionContextShape<TSchema, TTransaction>
 > & {
-  readonly usePromise: <A>(
-    fn: (
-      transaction: ZeroServerTransaction<TSchema, TTransaction>,
-      options: { readonly signal: AbortSignal },
-    ) => PromiseLike<A>,
-  ) => Effect.Effect<A, ServerTransactionError, ServerTransactionContextIdentifier<Id, TSchema, TTransaction>>;
-  readonly execute: <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<
-    A,
-    | E
-    | MultipleTransactionsError
-    | OutOfOrderMutationError
-    | MutationAlreadyProcessedError
-    | UpdateClientMutationIdError
-    | ZeroDatabaseError,
-    | ServerSynchronizationContext.ServerSynchronizationContext
-    | ServerTransactionInput
-    | Exclude<
-        R,
-        Context.Service.Identifier<TClientTransaction> | ServerTransactionContextIdentifier<Id, TSchema, TTransaction>
-      >
-  >;
+  readonly database: ZQLDatabase<TSchema, TTransaction>;
+  readonly clientTransaction: TClientTransaction;
+};
+
+type AnyServerTransaction<
+  TIdentifier,
+  TSchema extends ZeroSchema,
+  TTransaction,
+  TClientIdentifier,
+  TClientTransaction extends Context.Key<TClientIdentifier, ZeroTransaction<TSchema>>,
+> = Context.Service<TIdentifier, ServerTransactionContextShape<TSchema, TTransaction>> & {
+  readonly database: ZQLDatabase<TSchema, TTransaction>;
+  readonly clientTransaction: TClientTransaction;
 };
 
 export const make = <
@@ -83,67 +73,52 @@ export const make = <
     ServerTransactionContext,
     ServerTransactionContextShape<TSchema, TTransaction>
   >()(`${id}/ServerTransactionContext` as const) {
-    static usePromise<A>(
-      fn: (
-        transaction: ZeroServerTransaction<TSchema, TTransaction>,
-        options: { readonly signal: AbortSignal },
-      ) => PromiseLike<A>,
-    ) {
-      return Effect.gen(function* () {
-        const ctx = yield* ServerTransactionContext;
-        return yield* Effect.tryPromise({
-          try: (signal) => fn(ctx.transaction, { signal }),
-          catch: (error) => new ServerTransactionError({ cause: Cause.fail(error) }),
-        });
-      });
-    }
-
-    static readonly execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-      const ctx = yield* Effect.context<
-        ServerTransactionInput | Exclude<R, Context.Service.Identifier<TClientTransaction> | ServerTransactionContext>
-      >();
-      const result = yield* Deferred.make<A, E | Effect.Error<typeof checkAndIncrementLastMutationId>>();
-
-      const transactionInput = yield* ServerTransactionInput;
-      yield* Effect.tryPromise({
-        try: (signal) =>
-          database.transaction(async (transaction, transactionHooks) => {
-            const exit = await Effect.flatMap(checkAndIncrementLastMutationId, () => effect).pipe(
-              Effect.provide([
-                Layer.succeed(ServerTransactionContext, { transaction, transactionHooks }),
-                Layer.succeed(clientTransaction, transaction),
-              ]),
-              (effect) => Effect.runPromiseExitWith(ctx)(effect, { signal }),
-            );
-            Deferred.doneUnsafe(result, exit);
-            if (Exit.isFailure(exit)) {
-              // This error's purpose is to differentiate between "external" errors
-              // that originate from the user-defined mutator code and "internal" errors
-              // that originate from our own code and the Zero API.
-              // Both types are caught in the "catch" block below, but at this point we only need to handle
-              // the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
-              // are already covered by passing the Exit result to the Deferred, which is why
-              // we have the ServerTransactionUserError silenced below in the pipe.
-              throw new ServerTransactionUserError();
-            }
-            return exit.value;
-          }, transactionInput),
-        catch: (error) => {
-          if (ServerTransactionUserError.is(error)) {
-            return error;
-          }
-          // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
-          // This can be caused by e.g. the database connection timing out or other database-related issues.
-          return new ZeroDatabaseError({ cause: Cause.fail(error) });
-        },
-      }).pipe(Effect.catchTag("ServerTransactionUserError", () => Effect.void));
-
-      return yield* Deferred.await(result);
-    }, ServerSynchronizationContext.guard);
+    static readonly database = database;
+    static readonly clientTransaction = clientTransaction;
   }
 
+  return ServerTransactionContext;
+};
+
+export const use = <TIdentifier, TSchema extends ZeroSchema, TTransaction, A>(
+  serverTransaction: Context.Service<TIdentifier, ServerTransactionContextShape<TSchema, TTransaction>>,
+  fn: (
+    transaction: ZeroServerTransaction<TSchema, TTransaction>,
+    options: { readonly signal: AbortSignal },
+  ) => PromiseLike<A>,
+): Effect.Effect<A, ServerTransactionError, TIdentifier> =>
+  Effect.gen(function* () {
+    const ctx = yield* serverTransaction;
+    return yield* Effect.tryPromise({
+      try: (signal) => fn(ctx.transaction, { signal }),
+      catch: (error) => new ServerTransactionError({ cause: Cause.fail(error) }),
+    });
+  });
+
+export const execute = <
+  TIdentifier,
+  TSchema extends ZeroSchema,
+  TTransaction,
+  TClientIdentifier,
+  TClientTransaction extends Context.Key<TClientIdentifier, ZeroTransaction<TSchema>>,
+>(
+  serverTransaction: AnyServerTransaction<TIdentifier, TSchema, TTransaction, TClientIdentifier, TClientTransaction>,
+): (<A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+) => Effect.Effect<
+  A,
+  | E
+  | MultipleTransactionsError
+  | OutOfOrderMutationError
+  | MutationAlreadyProcessedError
+  | UpdateClientMutationIdError
+  | ZeroDatabaseError,
+  | ServerSynchronizationContext.ServerSynchronizationContext
+  | ServerTransactionInput
+  | Exclude<R, TClientIdentifier | TIdentifier>
+>) => {
   const checkAndIncrementLastMutationId = Effect.gen(function* () {
-    const { transactionHooks } = yield* ServerTransactionContext;
+    const { transactionHooks } = yield* serverTransaction;
     const { clientID, mutationID: receivedMutationID } = yield* ServerTransactionInput;
 
     const { lastMutationID } = yield* Effect.tryPromise({
@@ -167,7 +142,46 @@ export const make = <
     }
   });
 
-  return ServerTransactionContext;
+  return Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+    const ctx = yield* Effect.context<ServerTransactionInput | Exclude<R, TClientIdentifier | TIdentifier>>();
+    const result = yield* Deferred.make<A, E | Effect.Error<typeof checkAndIncrementLastMutationId>>();
+
+    const transactionInput = yield* ServerTransactionInput;
+    yield* Effect.tryPromise({
+      try: (signal) =>
+        serverTransaction.database.transaction(async (transaction, transactionHooks) => {
+          const exit = await Effect.flatMap(checkAndIncrementLastMutationId, () => effect).pipe(
+            Effect.provide([
+              Layer.succeed(serverTransaction, { transaction, transactionHooks }),
+              Layer.succeed(serverTransaction.clientTransaction, transaction),
+            ]),
+            (effect) => Effect.runPromiseExitWith(ctx)(effect, { signal }),
+          );
+          Deferred.doneUnsafe(result, exit);
+          if (Exit.isFailure(exit)) {
+            // This error's purpose is to differentiate between "external" errors
+            // that originate from the user-defined mutator code and "internal" errors
+            // that originate from our own code and the Zero API.
+            // Both types are caught in the "catch" block below, but at this point we only need to handle
+            // the "internal" errors wrapping them in a `ZeroDatabaseError`, because "external" errors
+            // are already covered by passing the Exit result to the Deferred, which is why
+            // we have the ServerTransactionUserError silenced below in the pipe.
+            throw new ServerTransactionUserError();
+          }
+          return exit.value;
+        }, transactionInput),
+      catch: (error) => {
+        if (ServerTransactionUserError.is(error)) {
+          return error;
+        }
+        // This is for errors that occur when calling `database.transaction` despite the provided `effect` succeeding.
+        // This can be caused by e.g. the database connection timing out or other database-related issues.
+        return new ZeroDatabaseError({ cause: Cause.fail(error) });
+      },
+    }).pipe(Effect.catchTag("ServerTransactionUserError", () => Effect.void));
+
+    return yield* Deferred.await(result);
+  }, ServerSynchronizationContext.guard);
 };
 
 class ServerTransactionError extends Data.TaggedError("ServerTransactionError")<{

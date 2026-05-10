@@ -56,7 +56,7 @@ describe("Type tests", () => {
       const mutators = Mutators.make(mutatorSchema, {
         messages: {
           create: (msg) =>
-            clientTransaction.usePromise(async () => {
+            ClientTransaction.use(clientTransaction, async () => {
               // Use msg to verify type
               const _id: string = msg.id;
               const _body: string = msg.body;
@@ -108,17 +108,17 @@ describe("Type tests", () => {
         todo: {
           // Using arrow function with explicit type for best inference
           create: (args: { id: string; title: string }) =>
-            clientTransaction.usePromise(async () => {
+            ClientTransaction.use(clientTransaction, async () => {
               const _id: string = args.id;
               const _title: string = args.title;
             }),
           // Using Effect.fn with explicit type annotation
           toggle: Effect.fn(function* (_args: { id: string; done: boolean }) {
-            yield* clientTransaction.usePromise(async () => {});
+            yield* ClientTransaction.use(clientTransaction, async () => {});
           }),
           // Using Effect.fn with no args (void schema)
           delete: Effect.fn(function* () {
-            yield* clientTransaction.usePromise(async () => {});
+            yield* ClientTransaction.use(clientTransaction, async () => {});
           }),
         },
       });

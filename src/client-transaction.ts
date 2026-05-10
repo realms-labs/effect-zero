@@ -15,9 +15,6 @@ type ClientTransactionService<Id extends string, TSchema extends ZeroSchema> = C
   ZeroTransaction<TSchema>
 > & {
   readonly schema: TSchema;
-  readonly usePromise: <A>(
-    fn: (transaction: ZeroTransaction<TSchema>, options: { readonly signal: AbortSignal }) => PromiseLike<A>,
-  ) => Effect.Effect<A, ClientTransactionError, ClientTransactionIdentifier<Id, TSchema>>;
 };
 
 export const make = <const Id extends string, TSchema extends ZeroSchema>(
@@ -26,22 +23,22 @@ export const make = <const Id extends string, TSchema extends ZeroSchema>(
 ): ClientTransactionService<Id, TSchema> => {
   class ClientTransaction extends Context.Service<ClientTransaction, ZeroTransaction<TSchema>>()(id) {
     static readonly schema = schema;
-
-    static usePromise<A>(
-      fn: (transaction: ZeroTransaction<TSchema>, options: { readonly signal: AbortSignal }) => PromiseLike<A>,
-    ) {
-      return Effect.gen(function* () {
-        const transaction = yield* ClientTransaction;
-        return yield* Effect.tryPromise({
-          try: (signal) => fn(transaction, { signal }),
-          catch: (error) => new ClientTransactionError({ cause: Cause.fail(error) }),
-        });
-      });
-    }
   }
 
   return ClientTransaction;
 };
+
+export const use = <TIdentifier, TSchema extends ZeroSchema, A>(
+  clientTransaction: Context.Service<TIdentifier, ZeroTransaction<TSchema>>,
+  fn: (transaction: ZeroTransaction<TSchema>, options: { readonly signal: AbortSignal }) => PromiseLike<A>,
+): Effect.Effect<A, ClientTransactionError, TIdentifier> =>
+  Effect.gen(function* () {
+    const transaction = yield* clientTransaction;
+    return yield* Effect.tryPromise({
+      try: (signal) => fn(transaction, { signal }),
+      catch: (error) => new ClientTransactionError({ cause: Cause.fail(error) }),
+    });
+  });
 
 class ClientTransactionError extends Data.TaggedError("ClientTransactionError")<{
   readonly cause: Cause.Cause<unknown>;

@@ -19,7 +19,7 @@ import * as ServerSynchronizationContext from "./internal/server-synchronization
 import { prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
-import type * as ServerTransaction from "./server-transaction.js";
+import * as ServerTransaction from "./server-transaction.js";
 import * as Types from "./types/push.js";
 import type { TransformRequestMessage } from "./types/queries.js";
 
@@ -32,7 +32,7 @@ type ServerTransactionContext<
   TSchema extends ZeroSchema,
   TTransaction,
   TClientTransaction extends Context.Key<unknown, ZeroTransaction<TSchema>>,
-> = Omit<ReturnType<typeof ServerTransaction.make<TId, TSchema, TTransaction, TClientTransaction>>, "use">;
+> = ReturnType<typeof ServerTransaction.make<TId, TSchema, TTransaction, TClientTransaction>>;
 
 export const processPush = Effect.fn(function* <
   TId extends string,
@@ -143,17 +143,13 @@ const processMutationError = Effect.fn(function* <
     details: errorMessage,
   } satisfies Types.AppError;
 
-  yield* transaction
-    .execute(
-      Effect.gen(function* () {
-        const { transactionHooks } = yield* transaction;
-        return yield* Effect.tryPromise({
-          try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
-          catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
-        });
-      }),
-    )
-    .pipe(Effect.catchCause(Effect.logError));
+  yield* Effect.gen(function* () {
+    const { transactionHooks } = yield* transaction;
+    return yield* Effect.tryPromise({
+      try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
+      catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
+    });
+  }).pipe(ServerTransaction.execute(transaction), Effect.catchCause(Effect.logError));
 
   yield* Effect.logWarning(`Mutation ${mutationID} for client ${clientID} was retried after an error: ${e}`);
 

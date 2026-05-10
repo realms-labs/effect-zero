@@ -78,14 +78,14 @@ const serverTransaction = ZfxServerTransaction.make("ServerTransaction", databas
 
 const transformArgsClient = vi.fn(
   Effect.fn(function* (a) {
-    yield* clientTransaction.use(async () => {});
+    yield* ZfxClientTransaction.use(clientTransaction, async () => {});
     return a;
   }),
 );
 
 const transformArgsServer = vi.fn(
   Effect.fn(function* (a) {
-    yield* serverTransaction.use(async () => {});
+    yield* ZfxServerTransaction.use(serverTransaction, async () => {});
     return a;
   }),
 );
@@ -93,16 +93,16 @@ const transformArgsServer = vi.fn(
 const clientMutators = ZfxMutators.make(mutatorSchema, {
   messages: {
     create: (msg) =>
-      clientTransaction.use(async (tx) => {
+      ZfxClientTransaction.use(clientTransaction, async (tx) => {
         await tx.mutate.messages.insert(msg);
       }),
     updateMessage: Effect.fn(function* (msg: { id: string; body: string }) {
-      yield* clientTransaction.use(async (tx) => {
+      yield* ZfxClientTransaction.use(clientTransaction, async (tx) => {
         await tx.mutate.messages.update(msg);
       });
     }),
     deleteAll: Effect.fn(function* () {
-      yield* clientTransaction.use(async (_tx) => {});
+      yield* ZfxClientTransaction.use(clientTransaction, async (_tx) => {});
     }),
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
@@ -127,35 +127,31 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
 
 const serverMutators = ZfxMutators.make(mutatorSchema, {
   messages: {
-    create: (msg) => clientMutators.messages.create(msg).pipe(serverTransaction.execute),
+    create: (msg) => clientMutators.messages.create(msg).pipe(ZfxServerTransaction.execute(serverTransaction)),
     updateMessage: Effect.fn(function* (msg: { id: string; body: string }) {
-      yield* clientMutators.messages.updateMessage(msg).pipe(serverTransaction.execute);
+      yield* clientMutators.messages.updateMessage(msg).pipe(ZfxServerTransaction.execute(serverTransaction));
     }),
     deleteAll: Effect.fn(function* () {
-      yield* clientMutators.messages.deleteAll().pipe(serverTransaction.execute);
+      yield* clientMutators.messages.deleteAll().pipe(ZfxServerTransaction.execute(serverTransaction));
     }),
   },
   optionalVoidArg: Effect.fn(function* () {}),
   transformArgs: Effect.fn(function* (a) {
-    return yield* transformArgsServer(a).pipe(serverTransaction.execute);
+    return yield* transformArgsServer(a).pipe(ZfxServerTransaction.execute(serverTransaction));
   }),
   throwsError: Effect.fn(function* () {
     yield* Effect.void;
     throw new Error("error in throwsError");
   }),
   throwsErrorInsideTransaction: Effect.fn(function* () {
-    yield* serverTransaction
-      .use(() => {
-        throw new Error("error in throwsErrorInsideTransaction");
-      })
-      .pipe(serverTransaction.execute);
+    yield* ZfxServerTransaction.use(serverTransaction, () => {
+      throw new Error("error in throwsErrorInsideTransaction");
+    }).pipe(ZfxServerTransaction.execute(serverTransaction));
   }),
   throwsErrorAfterTransaction: Effect.fn(function* () {
-    yield* serverTransaction
-      .use(async (tx) => {
-        await tx.dbTransaction.wrappedTransaction.insert(messages).values({ id: nanoid(), body: "hello world" });
-      })
-      .pipe(serverTransaction.execute);
+    yield* ZfxServerTransaction.use(serverTransaction, async (tx) => {
+      await tx.dbTransaction.wrappedTransaction.insert(messages).values({ id: nanoid(), body: "hello world" });
+    }).pipe(ZfxServerTransaction.execute(serverTransaction));
     throw new Error("error in throwsErrorAfterTransaction");
   }),
   clientThrowsError: Effect.fn(function* () {}),
@@ -163,42 +159,34 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
     yield* Effect.fail(new Error("error in yieldsError"));
   }),
   yieldsErrorInsideTransaction: Effect.fn(function* () {
-    yield* Effect.fail(new Error("error in yieldsErrorInsideTransaction")).pipe(serverTransaction.execute);
+    yield* Effect.fail(new Error("error in yieldsErrorInsideTransaction")).pipe(
+      ZfxServerTransaction.execute(serverTransaction),
+    );
   }),
   yieldsErrorAfterTransaction: Effect.fn(function* () {
-    yield* serverTransaction
-      .use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-      })
-      .pipe(serverTransaction.execute);
+    yield* ZfxServerTransaction.use(serverTransaction, async (tx) => {
+      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+    }).pipe(ZfxServerTransaction.execute(serverTransaction));
     yield* Effect.fail(new Error("error in yieldsErrorAfterTransaction"));
   }),
   noTransaction: Effect.fn(function* () {}),
   doubleTransaction: Effect.fn(function* () {
-    yield* serverTransaction
-      .use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-      })
-      .pipe(serverTransaction.execute);
-    yield* serverTransaction
-      .use(async (tx) => {
-        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-      })
-      .pipe(serverTransaction.execute);
+    yield* ZfxServerTransaction.use(serverTransaction, async (tx) => {
+      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+    }).pipe(ZfxServerTransaction.execute(serverTransaction));
+    yield* ZfxServerTransaction.use(serverTransaction, async (tx) => {
+      await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+    }).pipe(ZfxServerTransaction.execute(serverTransaction));
   }),
   concurrentTransactions: Effect.fn(function* () {
     yield* Effect.all(
       [
-        serverTransaction
-          .use(async (tx) => {
-            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-          })
-          .pipe(serverTransaction.execute),
-        serverTransaction
-          .use(async (tx) => {
-            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
-          })
-          .pipe(serverTransaction.execute),
+        ZfxServerTransaction.use(serverTransaction, async (tx) => {
+          await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+        }).pipe(ZfxServerTransaction.execute(serverTransaction)),
+        ZfxServerTransaction.use(serverTransaction, async (tx) => {
+          await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
+        }).pipe(ZfxServerTransaction.execute(serverTransaction)),
       ],
       { concurrency: "unbounded" },
     );

@@ -8,23 +8,25 @@ import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
-import type * as ClientTransaction from "./client-transaction.js";
 import * as Mutators from "./mutators.js";
 
-type ClientTransactionContext<TSchema extends ZeroSchema> = Omit<
-  ReturnType<typeof ClientTransaction.make<string, TSchema>>,
-  "use"
->;
+type ClientTransactionContext<TIdentifier, TSchema extends ZeroSchema> = Context.Key<
+  TIdentifier,
+  ZeroTransaction<TSchema>
+> & {
+  readonly schema: TSchema;
+};
 
-export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
-  transaction: ClientTransactionContext<TSchema>,
+export const make = Effect.fn(function* <
+  TClientTransaction,
+  TSchema extends ZeroSchema,
+  TMutators extends Mutators.AnyMutators,
+>(
+  transaction: ClientTransactionContext<TClientTransaction, TSchema>,
   mutators: TMutators,
   options: Omit<ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>, "schema" | "mutators">,
 ) {
-  const ctx =
-    yield* Effect.context<
-      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, Context.Service.Identifier<typeof transaction>>
-    >();
+  const ctx = yield* Effect.context<Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, TClientTransaction>>();
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
