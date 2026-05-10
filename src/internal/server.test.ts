@@ -3,15 +3,15 @@ import { assertExitFailure } from "@effect/vitest/utils";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { NoTransactionError, ServerSynchronizationContext } from "./server.js";
+import { finalize, guard, NoTransactionError, ServerSynchronizationContext } from "./server.js";
 
 describe("ServerSynchronizationContext", () => {
   it.effect(
     "finalize should return NoTransactionError when called without guard",
     Effect.fn(function* () {
       const result = yield* Effect.void.pipe(
-        ServerSynchronizationContext.finalize,
-        Effect.provide(ServerSynchronizationContext.Default),
+        finalize,
+        Effect.provide(ServerSynchronizationContext.layer),
         Effect.exit,
       );
       assertExitFailure(result, Cause.fail(new NoTransactionError()));
@@ -22,9 +22,9 @@ describe("ServerSynchronizationContext", () => {
     "finalize shouldn't return errors when called with guard",
     Effect.fn(function* ({ expect }) {
       const result = yield* Effect.void.pipe(
-        ServerSynchronizationContext.guard,
-        ServerSynchronizationContext.finalize,
-        Effect.provide(ServerSynchronizationContext.Default),
+        guard,
+        finalize,
+        Effect.provide(ServerSynchronizationContext.layer),
         Effect.exit,
       );
       if (Exit.isFailure(result)) {

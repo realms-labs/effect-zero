@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import {
+  finalize,
   MutationAlreadyProcessedError,
   OutOfOrderMutationError,
   ServerSynchronizationContext,
@@ -67,7 +68,7 @@ export const processPush = Effect.fn(function* <
             clientGroupID: request.clientGroupID,
             upstreamSchema: params.schema,
           }),
-          Effect.provide(ServerSynchronizationContext.Default),
+          Effect.provide(ServerSynchronizationContext.layer),
         );
       }),
     ),
@@ -103,7 +104,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
   );
 
   return yield* mutator(args).pipe(
-    ServerSynchronizationContext.finalize,
+    finalize,
     Effect.as<Types.MutationResult>({}),
     Effect.catchIf(OutOfOrderMutationError.is, (e) =>
       Effect.logError(e.message).pipe(

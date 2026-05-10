@@ -14,9 +14,9 @@ import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import type * as ClientTransaction from "./client-transaction.js";
 import {
+  guard,
   MutationAlreadyProcessedError,
   OutOfOrderMutationError,
-  ServerSynchronizationContext,
   ServerTransactionInput,
 } from "./internal/server.js";
 import { prefixId } from "./internal/utils.js";
@@ -90,7 +90,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     }).pipe(Effect.catchTag("ServerTransactionUserError", () => Effect.void));
 
     return yield* Deferred.await(result);
-  }, ServerSynchronizationContext.guard);
+  }, guard);
 
   const checkAndIncrementLastMutationId = Effect.gen(function* () {
     const { transactionHooks } = yield* ServerTransactionContext;
