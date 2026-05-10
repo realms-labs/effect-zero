@@ -244,10 +244,8 @@ const waitForLastItem = Effect.fn("waitForLastItem")(
       stream,
       Stream.timeout(timeout ?? Duration.millis(200)),
       Stream.runLast,
-      Effect.map(
-        Effect.catchTag("NoSuchElementError", () => Effect.fail(new Error("No items received from server"))),
-      ),
-      Effect.flatten,
+      Effect.flatMap(Effect.fromOption),
+      Effect.catchTag("NoSuchElementError", () => Effect.fail(new Error("No items received from server"))),
     );
   },
 );
