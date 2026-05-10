@@ -33,10 +33,11 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
         Effect.provideService(transaction, tx),
         Effect.runPromiseExitWith(ctx),
       );
-      return Exit.getOrElse(exit, (c) => {
+      if (Exit.isFailure(exit)) {
         // Extract underlying error bypassing FiberFailure
-        throw Cause.squash(c);
-      });
+        throw Cause.squash(exit.cause);
+      }
+      return exit.value;
     };
   }
 
