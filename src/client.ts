@@ -1,9 +1,4 @@
-import {
-  Zero,
-  type ZeroOptions,
-  type Schema as ZeroSchema,
-  type Transaction as ZeroTransaction,
-} from "@rocicorp/zero";
+import { Zero, type ZeroOptions, type Schema as ZeroSchema, type Transaction as ZeroTransaction } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -20,42 +15,20 @@ type ClientTransactionContext<TSchema extends ZeroSchema> = Omit<
   "use"
 >;
 
-export const make = Effect.fn(function* <
-  TSchema extends ZeroSchema,
-  TMutators extends Mutators.AnyMutators,
->(
+export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
   transaction: ClientTransactionContext<TSchema>,
   mutators: TMutators,
-  options: Omit<
-    ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>,
-    "schema" | "mutators"
-  >,
+  options: Omit<ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>, "schema" | "mutators">,
 ) {
   const ctx =
     yield* Effect.context<
-      Exclude<
-        Mutators.ExtractMutatorsRequirements<TMutators>,
-        ClientTransaction.ClientTransaction
-      >
+      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, ClientTransaction.ClientTransaction>
     >();
 
-  function unwrapMutator<E>(
-    mutator: Mutators.AnyMutator<
-      Mutators.ExtractMutatorsRequirements<TMutators>,
-      E
-    >,
-  ) {
-    return async (
-      tx: ZeroTransaction<TSchema>,
-      args: unknown,
-      _ctx: unknown,
-    ) => {
-      const exit = await Schema.decodeUnknownEffect(
-        mutator[Mutators.MutatorSchemaSymbol],
-      )(args).pipe(
-        Effect.catchTag("SchemaError", (e) =>
-          Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) })),
-        ),
+  function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
+    return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
+      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
+        Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction, tx),
         Effect.runPromiseExitWith(ctx),
@@ -69,10 +42,7 @@ export const make = Effect.fn(function* <
   }
 
   const unwrappedMutators = Rec.map(mutators, (v) =>
-    Match.value(v).pipe(
-      Match.when(Predicate.isFunction, unwrapMutator),
-      Match.orElse(Rec.map(unwrapMutator)),
-    ),
+    Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
   ) as ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>["mutators"];
 
   return yield* Effect.acquireRelease(
@@ -87,23 +57,14 @@ export const make = Effect.fn(function* <
   );
 });
 
-type UnwrapMutator<
-  TSchema extends ZeroSchema,
-  TMutators extends Mutators.AnyMutator,
-> =
-  Parameters<TMutators> extends []
-    ? (transaction: ZeroTransaction<TSchema>) => Promise<void>
-    : (
-        transaction: ZeroTransaction<TSchema>,
-        args: Schema.Codec.Encoded<
-          TMutators[typeof Mutators.MutatorSchemaSymbol]
-        >,
-      ) => Promise<void>;
+type UnwrapMutator<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutator> = Parameters<TMutators> extends []
+  ? (transaction: ZeroTransaction<TSchema>) => Promise<void>
+  : (
+      transaction: ZeroTransaction<TSchema>,
+      args: Schema.Codec.Encoded<TMutators[typeof Mutators.MutatorSchemaSymbol]>,
+    ) => Promise<void>;
 
-type UnwrapMutators<
-  TSchema extends ZeroSchema,
-  TMutators extends Mutators.AnyMutators,
-> = {
+type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators> = {
   [A in keyof TMutators]: TMutators[A] extends Mutators.AnyMutator
     ? UnwrapMutator<TSchema, TMutators[A]>
     : {
@@ -113,8 +74,6 @@ type UnwrapMutators<
       };
 } & {};
 
-export class ClientArgsParseError extends Data.TaggedError(
-  "ClientArgsParseError",
-)<{
+export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
   readonly cause: Cause.Cause<Schema.SchemaError>;
 }> {}
