@@ -26,7 +26,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction.Context, tx),
-        (effect) => Effect.runPromiseExitWith(ctx)(effect),
+        Effect.runPromiseExitWith(ctx),
       );
       if (Exit.isFailure(exit)) {
         // Extract underlying error bypassing FiberFailure

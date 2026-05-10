@@ -50,10 +50,7 @@ export const processPush = Effect.fn(function* <
         return yield* processMutation<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
           Effect.catch((e) => processMutationError(transaction, e)),
           Effect.map((result) =>
-            Types.MutationResponse.make({
-              id: { id: mutation.id, clientID: mutation.clientID },
-              result,
-            }),
+            Types.MutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
           ),
           Effect.provideService(ServerTransactionInput, {
             clientID: mutation.clientID,
@@ -102,18 +99,12 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     Effect.as<Types.MutationResult>({}),
     Effect.catchIf(OutOfOrderMutationError.is, (e) =>
       Effect.logError(e.message).pipe(
-        Effect.as({
-          error: "oooMutation",
-          details: e.message,
-        } satisfies Types.ZeroError),
+        Effect.as({ error: "oooMutation", details: e.message } satisfies Types.ZeroError),
       ),
     ),
     Effect.catchIf(MutationAlreadyProcessedError.is, (e) =>
       Effect.logWarning(e.message).pipe(
-        Effect.as({
-          error: "alreadyProcessed",
-          details: e.message,
-        } satisfies Types.ZeroError),
+        Effect.as({ error: "alreadyProcessed", details: e.message } satisfies Types.ZeroError),
       ),
     ),
     // Case #5 "Zero transactions then fail" / #6 "Fail before transaction"
@@ -145,11 +136,7 @@ const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TT
       Effect.gen(function* () {
         const { transactionHooks } = yield* transaction.Context;
         return yield* Effect.tryPromise({
-          try: () =>
-            transactionHooks.writeMutationResult({
-              id: { id: mutationID, clientID },
-              result: appError,
-            }),
+          try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
           catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
         });
       }),
@@ -221,9 +208,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
   });
 });
 
-class QueryNotFound extends Data.TaggedError("QueryNotFound")<{
-  name: string;
-}> {
+class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> {
   override get message() {
     return `Query not found: ${this.name}`;
   }
@@ -239,6 +224,4 @@ class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{
   }
 }
 
-class QueryRequestError extends Data.TaggedError("QueryRequestError")<{
-  cause: Cause.Cause<unknown>;
-}> {}
+class QueryRequestError extends Data.TaggedError("QueryRequestError")<{ cause: Cause.Cause<unknown> }> {}

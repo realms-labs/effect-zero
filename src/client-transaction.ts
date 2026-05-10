@@ -4,6 +4,7 @@ import * as Ctx from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
+// biome-ignore lint/suspicious/noExplicitAny: any client transaction (its Id literal is irrelevant here)
 export type Context<TSchema extends ZeroSchema> = ReturnType<typeof make<any, TSchema>>;
 
 export const make = <const Id extends string, TSchema extends ZeroSchema>(id: Id, schema: TSchema) => {

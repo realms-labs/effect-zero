@@ -15,20 +15,17 @@ import { prefixId } from "./internal/utils.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
+// biome-ignore lint/suspicious/noExplicitAny: any client transaction (its Id literal is irrelevant here)
 export type Context<TSchema extends ZeroSchema, TTransaction> = ReturnType<typeof make<any, TSchema, TTransaction>>;
 
 export const make = <const Id extends string, TSchema extends ZeroSchema, TTransaction>(
   id: Id,
   database: ZQLDatabase<TSchema, TTransaction>,
-  // biome-ignore lint/suspicious/noExplicitAny: any client transaction (its Id literal is irrelevant here)
   clientTransaction: ClientTransaction.Context<TSchema>,
 ) => {
   class Context extends Ctx.Service<
     Context,
-    {
-      transaction: ZeroServerTransaction<TSchema, TTransaction>;
-      transactionHooks: TransactionProviderHooks;
-    }
+    { transaction: ZeroServerTransaction<TSchema, TTransaction>; transactionHooks: TransactionProviderHooks }
   >()(`${id}/ServerTransactionContext` as const) {}
 
   const use = <A>(
@@ -57,10 +54,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
         database.transaction(async (transaction, transactionHooks) => {
           const exit = await Effect.flatMap(checkAndIncrementLastMutationId, () => effect).pipe(
             Effect.provide([
-              Layer.succeed(Context, {
-                transaction,
-                transactionHooks,
-              }),
+              Layer.succeed(Context, { transaction, transactionHooks }),
               Layer.succeed(clientTransaction.Context, transaction),
             ]),
             (effect) => Effect.runPromiseExitWith(ctx)(effect, { signal }),
