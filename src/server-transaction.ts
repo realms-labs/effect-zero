@@ -25,6 +25,7 @@ import { prefixId } from "./internal/utils.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
+// Self-type anchor for the factory-built Tag. See client-transaction.ts for the full rationale.
 export interface ServerTransactionContext {
   readonly _tag: unique symbol;
 }

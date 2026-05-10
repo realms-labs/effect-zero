@@ -5,7 +5,15 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type * as Types from "effect/Types";
 
-// Necessary workaround for TS declaration generation
+// Self-type anchor for the factory-built Tag.
+//
+// v4's `Context.Service<Self, Shape>` requires a nominal `Self` marker. For module-level
+// Tags this is just the class itself (`class X extends Context.Service<X, S>()(...) {}`),
+// but our Tag is built per-call inside `make`, so the local class can't double as the Self
+// for external references. We anchor to this shared interface instead. Matches the spirit
+// of `effect-smol/src/LayerMap.ts:307-374` where the helpers-extending interface threads
+// `Self` through `Context.ServiceClass<Self, Id, Shape>`; LayerMap asks callers to supply
+// `Self`, while we pre-bake it here so the factory keeps a simple `make(id, schema)` shape.
 export interface ClientTransaction {
   readonly _tag: unique symbol;
 }
