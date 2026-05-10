@@ -12,26 +12,22 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
-import type * as ClientTransaction from "./client-transaction.js";
+import type * as ClientTransactionModule from "./client-transaction.js";
 import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { prefixId } from "./internal/utils.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
-export interface ServerTransactionContext {
-  readonly _tag: unique symbol;
-}
-
 export const make = <const Id extends string, TSchema extends ZeroSchema, TTransaction>(
   id: Id,
   database: ZQLDatabase<TSchema, TTransaction>,
-  clientTransaction: Context.TagClass<ClientTransaction.ClientTransaction, string, ZeroTransaction<TSchema>>,
+  clientTransaction: ReturnType<typeof ClientTransactionModule.make<string, TSchema>>,
 ) => {
-  const ServerTransactionContext = Context.Tag(`${id}/ServerTransactionContext` as const)<
+  class ServerTransactionContext extends Context.Service<
     ServerTransactionContext,
     { transaction: ZeroServerTransaction<TSchema, TTransaction>; transactionHooks: TransactionProviderHooks }
-  >();
+  >()(`${id}/ServerTransactionContext` as const) {}
 
   const use = <A>(
     fn: (
@@ -39,16 +35,18 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
       options: { readonly signal: AbortSignal },
     ) => PromiseLike<A>,
   ) =>
-    Effect.flatMap(ServerTransactionContext, (ctx) =>
-      Effect.tryPromise({
+    Effect.gen(function* () {
+      const ctx = yield* ServerTransactionContext;
+      return yield* Effect.tryPromise({
         try: (signal) => fn(ctx.transaction, { signal }),
         catch: (error) => new ServerTransactionError({ cause: Cause.fail(error) }),
-      }),
-    );
+      });
+    });
 
   const execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
     const ctx = yield* Effect.context<
-      ServerTransactionInput | Exclude<R, ClientTransaction.ClientTransaction | ServerTransactionContext>
+      | ServerTransactionInput
+      | Exclude<R, InstanceType<typeof clientTransaction.ClientTransaction> | ServerTransactionContext>
     >();
     const result = yield* Deferred.make<A, E | Effect.Error<typeof checkAndIncrementLastMutationId>>();
 
@@ -59,7 +57,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
           const exit = await Effect.flatMap(checkAndIncrementLastMutationId, () => effect).pipe(
             Effect.provide([
               Layer.succeed(ServerTransactionContext, { transaction, transactionHooks }),
-              Layer.succeed(clientTransaction, transaction),
+              Layer.succeed(clientTransaction.ClientTransaction, transaction),
             ]),
             (effect) => Effect.runPromiseExitWith(ctx)(effect, { signal }),
           );
@@ -114,7 +112,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     }
   });
 
-  return Object.assign(ServerTransactionContext, { use, execute });
+  return { ServerTransactionContext, use, execute };
 };
 
 class ServerTransactionError extends Data.TaggedError("ServerTransactionError")<{
