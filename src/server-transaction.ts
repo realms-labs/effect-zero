@@ -13,12 +13,8 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import type * as ClientTransaction from "./client-transaction.js";
-import {
-  guard,
-  MutationAlreadyProcessedError,
-  OutOfOrderMutationError,
-  ServerTransactionInput,
-} from "./internal/server.js";
+import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
+import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { prefixId } from "./internal/utils.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
@@ -90,7 +86,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     }).pipe(Effect.catchTag("ServerTransactionUserError", () => Effect.void));
 
     return yield* Deferred.await(result);
-  }, guard);
+  }, ServerSynchronizationContext.guard);
 
   const checkAndIncrementLastMutationId = Effect.gen(function* () {
     const { transactionHooks } = yield* ServerTransactionContext;

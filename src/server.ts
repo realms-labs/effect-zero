@@ -13,13 +13,8 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
-import {
-  finalize,
-  MutationAlreadyProcessedError,
-  OutOfOrderMutationError,
-  ServerSynchronizationContext,
-  ServerTransactionInput,
-} from "./internal/server.js";
+import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
+import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
@@ -104,7 +99,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
   );
 
   return yield* mutator(args).pipe(
-    finalize,
+    ServerSynchronizationContext.finalize,
     Effect.as<Types.MutationResult>({}),
     Effect.catchIf(OutOfOrderMutationError.is, (e) =>
       Effect.logError(e.message).pipe(
