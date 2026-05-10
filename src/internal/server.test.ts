@@ -3,7 +3,8 @@ import { assertExitFailure } from "@effect/vitest/utils";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { NoTransactionError, ServerSynchronizationContext } from "./server.js";
+import { NoTransactionError } from "./server.js";
+import * as ServerSynchronizationContext from "./server-synchronization-context.js";
 
 describe("ServerSynchronizationContext", () => {
   it.effect(
@@ -11,7 +12,7 @@ describe("ServerSynchronizationContext", () => {
     Effect.fn(function* () {
       const result = yield* Effect.void.pipe(
         ServerSynchronizationContext.finalize,
-        Effect.provide(ServerSynchronizationContext.Default),
+        Effect.provide(ServerSynchronizationContext.layer),
         Effect.exit,
       );
       assertExitFailure(result, Cause.fail(new NoTransactionError()));
@@ -24,7 +25,7 @@ describe("ServerSynchronizationContext", () => {
       const result = yield* Effect.void.pipe(
         ServerSynchronizationContext.guard,
         ServerSynchronizationContext.finalize,
-        Effect.provide(ServerSynchronizationContext.Default),
+        Effect.provide(ServerSynchronizationContext.layer),
         Effect.exit,
       );
       if (Exit.isFailure(result)) {

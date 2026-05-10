@@ -13,12 +13,8 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
-import {
-  MutationAlreadyProcessedError,
-  OutOfOrderMutationError,
-  ServerSynchronizationContext,
-  ServerTransactionInput,
-} from "./internal/server.js";
+import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
+import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
@@ -67,7 +63,7 @@ export const processPush = Effect.fn(function* <
             clientGroupID: request.clientGroupID,
             upstreamSchema: params.schema,
           }),
-          Effect.provide(ServerSynchronizationContext.Default),
+          Effect.provide(ServerSynchronizationContext.layer),
         );
       }),
     ),
