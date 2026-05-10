@@ -26,17 +26,12 @@ import type { TransformRequestMessage } from "./types/queries.js";
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
 
-type ServerTransactionContext<TSchema extends ZeroSchema, TTransaction> = Omit<
-  ReturnType<typeof ServerTransaction.make<string, TSchema, TTransaction>>,
-  "use"
->;
-
 export const processPush = Effect.fn(function* <
   TSchema extends ZeroSchema,
   TTransaction,
   TMutators extends Mutators.AnyMutators,
 >(
-  transaction: ServerTransactionContext<TSchema, TTransaction>,
+  transaction: ServerTransaction.Context<TSchema, TTransaction>,
   mutators: TMutators,
   params: Types.PushParams,
   request: Types.PushBody,
@@ -119,7 +114,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
 });
 
 const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TTransaction>(
-  transaction: ServerTransactionContext<TSchema, TTransaction>,
+  transaction: ServerTransaction.Context<TSchema, TTransaction>,
   e: unknown,
 ) {
   const { clientID, mutationID } = yield* ServerTransactionInput;
@@ -139,7 +134,7 @@ const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TT
   yield* transaction
     .execute(
       Effect.gen(function* () {
-        const { transactionHooks } = yield* transaction;
+        const { transactionHooks } = yield* transaction.Context;
         return yield* Effect.tryPromise({
           try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
           catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
