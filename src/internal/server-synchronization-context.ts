@@ -62,4 +62,3 @@ export const finalize = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       ),
     );
   });
-

@@ -1,0 +1,36 @@
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "editor.defaultFormatter": "biomejs.biome",
+  "editor.formatOnSave": true,
+  // define each one individually to override any potential conflicting global settings
+  "[typescript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "biome.enabled": true,
+  "editor.codeActionsOnSave": {
+    // Keep fixes opt-in so save stays fast.
+    "source.fixAll.biome": "explicit"
+  },
+  "files.exclude": {
+    "**/.git": false,
+    "**/.DS_Store": false,
+    "**/bun.lockb": false,
+    "**/node_modules": false
+  }
+}

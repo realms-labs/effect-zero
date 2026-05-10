@@ -1,24 +1,26 @@
 import type { Schema as ZeroSchema, Transaction as ZeroTransaction } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
-import * as Context from "effect/Context";
+import * as Ctx from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
+export type Context<TSchema extends ZeroSchema> = ReturnType<typeof make<any, TSchema>>;
+
 export const make = <const Id extends string, TSchema extends ZeroSchema>(id: Id, schema: TSchema) => {
-  class ClientTransaction extends Context.Service<ClientTransaction, ZeroTransaction<TSchema>>()(id) {}
+  class Context extends Ctx.Service<Context, ZeroTransaction<TSchema>>()(id) {}
 
   const use = <A>(
     fn: (transaction: ZeroTransaction<TSchema>, options: { readonly signal: AbortSignal }) => PromiseLike<A>,
   ) =>
     Effect.gen(function* () {
-      const transaction = yield* ClientTransaction;
+      const transaction = yield* Context;
       return yield* Effect.tryPromise({
         try: (signal) => fn(transaction, { signal }),
         catch: (error) => new ClientTransactionError({ cause: Cause.fail(error) }),
       });
     });
 
-  return { ClientTransaction, use, schema };
+  return { Context, use, schema };
 };
 
 class ClientTransactionError extends Data.TaggedError("ClientTransactionError")<{

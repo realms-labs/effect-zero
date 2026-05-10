@@ -10,19 +10,14 @@ import * as Schema from "effect/Schema";
 import type * as ClientTransaction from "./client-transaction.js";
 import * as Mutators from "./mutators.js";
 
-type ClientTransactionContext<TSchema extends ZeroSchema> = Omit<
-  ReturnType<typeof ClientTransaction.make<string, TSchema>>,
-  "use"
->;
-
 export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
-  transaction: ClientTransactionContext<TSchema>,
+  transaction: ClientTransaction.Context<TSchema>,
   mutators: TMutators,
   options: Omit<ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>, "schema" | "mutators">,
 ) {
   const ctx =
     yield* Effect.context<
-      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, ClientTransaction.ClientTransaction>
+      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction.Context)["Identifier"]>
     >();
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
@@ -30,8 +25,8 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
       const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
-        Effect.provideService(transaction, tx),
-        Effect.runPromiseExitWith(ctx),
+        Effect.provideService(transaction.Context, tx),
+        (effect) => Effect.runPromiseExitWith(ctx)(effect),
       );
       if (Exit.isFailure(exit)) {
         // Extract underlying error bypassing FiberFailure
