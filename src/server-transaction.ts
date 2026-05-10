@@ -12,8 +12,14 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
+import type * as Types from "effect/Types";
 import type * as ClientTransaction from "./client-transaction.js";
-import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
+import {
+  type MultipleTransactionsError,
+  MutationAlreadyProcessedError,
+  OutOfOrderMutationError,
+  ServerTransactionInput,
+} from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { prefixId } from "./internal/utils.js";
 
@@ -23,30 +29,68 @@ export interface ServerTransactionContext {
   readonly _tag: unique symbol;
 }
 
+type ServerTransactionContextShape<TSchema extends ZeroSchema, TTransaction> = {
+  transaction: ZeroServerTransaction<TSchema, TTransaction>;
+  transactionHooks: TransactionProviderHooks;
+};
+
+export interface ServerTransactionTag<Id extends string, TSchema extends ZeroSchema, TTransaction>
+  extends Context.ServiceClass<
+    ServerTransactionContext,
+    `${Id}/ServerTransactionContext`,
+    ServerTransactionContextShape<TSchema, TTransaction>
+  > {
+  readonly usePromise: <A>(
+    fn: (
+      transaction: ZeroServerTransaction<TSchema, TTransaction>,
+      options: { readonly signal: AbortSignal },
+    ) => PromiseLike<A>,
+  ) => Effect.Effect<A, ServerTransactionError, ServerTransactionContext>;
+  readonly execute: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<
+    A,
+    | E
+    | MultipleTransactionsError
+    | OutOfOrderMutationError
+    | MutationAlreadyProcessedError
+    | UpdateClientMutationIdError
+    | ZeroDatabaseError,
+    | ServerSynchronizationContext.ServerSynchronizationContext
+    | ServerTransactionInput
+    | Exclude<R, ClientTransaction.ClientTransaction | ServerTransactionContext>
+  >;
+}
+
 export const make = <const Id extends string, TSchema extends ZeroSchema, TTransaction>(
   id: Id,
   database: ZQLDatabase<TSchema, TTransaction>,
-  clientTransaction: Context.TagClass<ClientTransaction.ClientTransaction, string, ZeroTransaction<TSchema>>,
-) => {
-  const ServerTransactionContext = Context.Tag(`${id}/ServerTransactionContext` as const)<
-    ServerTransactionContext,
-    { transaction: ZeroServerTransaction<TSchema, TTransaction>; transactionHooks: TransactionProviderHooks }
-  >();
+  clientTransaction: Context.Key<ClientTransaction.ClientTransaction, ZeroTransaction<TSchema>>,
+): ServerTransactionTag<Id, TSchema, TTransaction> => {
+  class Tag extends Context.Service<ServerTransactionContext, ServerTransactionContextShape<TSchema, TTransaction>>()(
+    `${id}/ServerTransactionContext` as const,
+  ) {}
 
-  const use = <A>(
+  // Mutate-via-Mutable-cast pattern from effect-smol/src/Layer/LayerMap.ts:307-374. Attaches
+  // `usePromise` and `execute` directly on the Service-derived class. Promise-based `usePromise`
+  // is named distinctly so it doesn't shadow the inherited `Context.Service.use`.
+  const Tag_ = Tag as unknown as Types.Mutable<ServerTransactionTag<Id, TSchema, TTransaction>>;
+
+  Tag_.usePromise = <A>(
     fn: (
       transaction: ZeroServerTransaction<TSchema, TTransaction>,
       options: { readonly signal: AbortSignal },
     ) => PromiseLike<A>,
   ) =>
-    Effect.flatMap(ServerTransactionContext, (ctx) =>
-      Effect.tryPromise({
+    Effect.gen(function* () {
+      const ctx = yield* Tag;
+      return yield* Effect.tryPromise({
         try: (signal) => fn(ctx.transaction, { signal }),
         catch: (error) => new ServerTransactionError({ cause: Cause.fail(error) }),
-      }),
-    );
+      });
+    });
 
-  const execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+  Tag_.execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
     const ctx = yield* Effect.context<
       ServerTransactionInput | Exclude<R, ClientTransaction.ClientTransaction | ServerTransactionContext>
     >();
@@ -58,7 +102,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
         database.transaction(async (transaction, transactionHooks) => {
           const exit = await Effect.flatMap(checkAndIncrementLastMutationId, () => effect).pipe(
             Effect.provide([
-              Layer.succeed(ServerTransactionContext, { transaction, transactionHooks }),
+              Layer.succeed(Tag, { transaction, transactionHooks }),
               Layer.succeed(clientTransaction, transaction),
             ]),
             (effect) => Effect.runPromiseExitWith(ctx)(effect, { signal }),
@@ -90,7 +134,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
   }, ServerSynchronizationContext.guard);
 
   const checkAndIncrementLastMutationId = Effect.gen(function* () {
-    const { transactionHooks } = yield* ServerTransactionContext;
+    const { transactionHooks } = yield* Tag;
     const { clientID, mutationID: receivedMutationID } = yield* ServerTransactionInput;
 
     const { lastMutationID } = yield* Effect.tryPromise({
@@ -114,7 +158,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     }
   });
 
-  return Object.assign(ServerTransactionContext, { use, execute });
+  return Tag_ as ServerTransactionTag<Id, TSchema, TTransaction>;
 };
 
 class ServerTransactionError extends Data.TaggedError("ServerTransactionError")<{
