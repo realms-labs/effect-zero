@@ -1,12 +1,21 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
 import { queryInternalsTag } from "@rocicorp/zero/bindings";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
 import * as ClientTransaction from "./client-transaction.js";
 import * as Mutators from "./mutators.js";
 import * as Query from "./query.js";
 import * as Server from "./server.js";
 import * as ServerTransaction from "./server-transaction.js";
+
+const DateFromNumber = Schema.Number.pipe(
+  Schema.decodeTo(Schema.Date, {
+    decode: SchemaGetter.transform((n: number) => new Date(n)),
+    encode: SchemaGetter.transform((d: Date) => d.getTime()),
+  }),
+);
 
 // Mock Zero schema for type tests
 const mockZeroSchema = {
@@ -125,13 +134,9 @@ describe("Type tests", () => {
     });
 
     it("nested mutator requirements should propagate", () => {
-      class NestedDummyTag extends Effect.Service<NestedDummyTag>()("effect-zero/test/NestedDummyTag", {
-        succeed: {},
-      }) {}
+      class NestedDummyTag extends Context.Service<NestedDummyTag, {}>()("effect-zero/test/NestedDummyTag") {}
 
-      class NestedDummyTag2 extends Effect.Service<NestedDummyTag2>()("effect-zero/test/NestedDummyTag2", {
-        succeed: {},
-      }) {}
+      class NestedDummyTag2 extends Context.Service<NestedDummyTag2, {}>()("effect-zero/test/NestedDummyTag2") {}
 
       const clientTransaction = ClientTransaction.make("TestClientTransactionNestedReq", mockZeroSchema);
       const serverTransaction = ServerTransaction.make(
@@ -167,13 +172,9 @@ describe("Type tests", () => {
     });
 
     it("mutator requirements should propagate", () => {
-      class DummyTag extends Effect.Service<DummyTag>()("effect-zero/test/DummyTag", {
-        succeed: {},
-      }) {}
+      class DummyTag extends Context.Service<DummyTag, {}>()("effect-zero/test/DummyTag") {}
 
-      class DummyTag2 extends Effect.Service<DummyTag2>()("effect-zero/test/DummyTag2", {
-        succeed: {},
-      }) {}
+      class DummyTag2 extends Context.Service<DummyTag2, {}>()("effect-zero/test/DummyTag2") {}
 
       const clientTransaction = ClientTransaction.make("TestClientTransaction2", mockZeroSchema);
       const serverTransaction = ServerTransaction.make("TestServerTransaction", mockDatabase, clientTransaction);
@@ -230,7 +231,7 @@ describe("Type tests", () => {
     it("query should accept and passthrough encoded non-JSON args", () => {
       const transformArgsQuery = Query.make({
         name: "transformArgs",
-        payload: Schema.DateFromNumber,
+        payload: DateFromNumber,
         query: Effect.fn(function* (a) {
           // Inside the query, 'a' should be the decoded type (Date)
           expectTypeOf<typeof a>().toEqualTypeOf<Date>();
