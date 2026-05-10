@@ -27,7 +27,22 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
-      // Normalize JSON's `null` to `undefined` so `Schema.Void` validates the "no args" case.
+      // Normalize JSON's `null` to `undefined` for `Schema.Void` decode.
+      //
+      // Zero's mutator-call dispatch unconditionally coerces the args slot via `args ?? null`
+      // when freezing pending mutations -- so an arg-less call (`mutator()`, where `args`
+      // is `undefined`) is stored, persisted, and replayed as `null`:
+      // https://github.com/rocicorp/mono/blob/05ab7f78047b5bb1cdfc0797bea8cf2537685c93/packages/replicache/src/replicache-impl.ts#L1521
+      //
+      // Effect v3's `Schema.Void` parser accepted any input unconditionally (its
+      // `VoidKeyword` case returned `Either.right(input)` like `Unknown`/`Any`), so
+      // `null` flowed through. v4's `Schema.Void` is strict: its AST uses
+      // `fromConst(this, undefined)` and rejects anything that isn't `=== undefined`
+      // with `Expected void, got null`.
+      //
+      // To preserve the v3 client behavior (arg-less mutators succeed) without
+      // weakening every mutator's payload schema, normalize the wire `null` back to
+      // `undefined` here before decoding.
       const input = args === null ? undefined : args;
       const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(input).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
