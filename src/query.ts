@@ -88,10 +88,8 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
       (view) => Effect.sync(() => view.destroy()),
     );
 
-    type ListenerArgs = Parameters<Parameters<(typeof view)["addListener"]>[0]>;
-
-    return Stream.callback<ListenerArgs>((queue) =>
-      Effect.sync(() => view.addListener((...args) => Queue.offerUnsafe(queue, args as ListenerArgs))),
+    return Stream.callback<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((queue) =>
+      Effect.sync(() => view.addListener((...args) => Queue.offerUnsafe(queue, args))),
     ).pipe(
       Stream.mapEffect(([data, resultType, error]) =>
         Effect.sync(() => {
