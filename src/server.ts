@@ -95,6 +95,7 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
         Match.orElse(() => Option.none()),
       ),
     ),
+    Effect.fromOption,
     Effect.catchTag("NoSuchElementError", () => Effect.fail(new MutatorNotFoundError({ name: mutation.name }))),
   );
 
@@ -141,8 +142,9 @@ const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TT
 
   yield* transaction
     .execute(
-      Effect.flatMap(transaction, ({ transactionHooks }) => {
-        return Effect.tryPromise({
+      Effect.gen(function* () {
+        const { transactionHooks } = yield* transaction;
+        return yield* Effect.tryPromise({
           try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
           catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
         });
@@ -193,12 +195,16 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
       handleQueryRequest(
         (name, args) =>
           Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
+            Effect.fromOption,
             Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
             Effect.runSyncExitWith(ctx),
-            Exit.getOrElse((cause) => {
-              throw new QueryUserError<E>({ cause });
-            }),
+            (exit) => {
+              if (Exit.isFailure(exit)) {
+                throw new QueryUserError<E>({ cause: exit.cause });
+              }
+              return exit.value;
+            },
           ),
         schema,
         payload as ReadonlyJSONValue,
