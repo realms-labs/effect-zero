@@ -6,6 +6,7 @@ import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import type * as ClientTransaction from "./client-transaction.js";
@@ -14,6 +15,8 @@ import * as ServerSynchronizationContext from "./internal/server-synchronization
 import { prefixId } from "./internal/utils.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
+
+type _ = NodeInspectSymbol;
 
 // biome-ignore lint/suspicious/noExplicitAny: any client transaction (its Id literal is irrelevant here)
 export type Context<TSchema extends ZeroSchema, TTransaction> = ReturnType<typeof make<any, TSchema, TTransaction>>;
