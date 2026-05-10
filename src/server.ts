@@ -1,7 +1,8 @@
-import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
+import type { ReadonlyJSONValue, Schema as ZeroSchema, Transaction as ZeroTransaction } from "@rocicorp/zero";
 import { handleQueryRequest } from "@rocicorp/zero/server";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
+import type * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -26,17 +27,21 @@ import type { TransformRequestMessage } from "./types/queries.js";
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
 
-type ServerTransactionContext<TSchema extends ZeroSchema, TTransaction> = Omit<
-  ReturnType<typeof ServerTransaction.make<string, TSchema, TTransaction>>,
-  "use"
->;
-
-export const processPush = Effect.fn(function* <
+type ServerTransactionContext<
+  TId extends string,
   TSchema extends ZeroSchema,
   TTransaction,
+  TClientTransaction extends Context.Key<unknown, ZeroTransaction<TSchema>>,
+> = Omit<ReturnType<typeof ServerTransaction.make<TId, TSchema, TTransaction, TClientTransaction>>, "use">;
+
+export const processPush = Effect.fn(function* <
+  TId extends string,
+  TSchema extends ZeroSchema,
+  TTransaction,
+  TClientTransaction extends Context.Key<unknown, ZeroTransaction<TSchema>>,
   TMutators extends Mutators.AnyMutators,
 >(
-  transaction: ServerTransactionContext<TSchema, TTransaction>,
+  transaction: ServerTransactionContext<TId, TSchema, TTransaction, TClientTransaction>,
   mutators: TMutators,
   params: Types.PushParams,
   request: Types.PushBody,
@@ -118,10 +123,12 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
   );
 });
 
-const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TTransaction>(
-  transaction: ServerTransactionContext<TSchema, TTransaction>,
-  e: unknown,
-) {
+const processMutationError = Effect.fn(function* <
+  TId extends string,
+  TSchema extends ZeroSchema,
+  TTransaction,
+  TClientTransaction extends Context.Key<unknown, ZeroTransaction<TSchema>>,
+>(transaction: ServerTransactionContext<TId, TSchema, TTransaction, TClientTransaction>, e: unknown) {
   const { clientID, mutationID } = yield* ServerTransactionInput;
 
   yield* Effect.logError(`Unexpected error processing mutation ${mutationID} for client ${clientID}`, Cause.fail(e));

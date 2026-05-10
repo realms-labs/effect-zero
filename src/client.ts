@@ -1,5 +1,6 @@
 import { Zero, type ZeroOptions, type Schema as ZeroSchema, type Transaction as ZeroTransaction } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
+import type * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -22,7 +23,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 ) {
   const ctx =
     yield* Effect.context<
-      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, ClientTransaction.ClientTransaction>
+      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, Context.Service.Identifier<typeof transaction>>
     >();
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
