@@ -27,7 +27,8 @@ import type { TransformRequestMessage } from "./types/queries.js";
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
 
 type ServerTransactionContext<TSchema extends ZeroSchema, TTransaction> = Omit<
-  ReturnType<typeof ServerTransaction.make<string, TSchema, TTransaction>>,
+  // biome-ignore lint/suspicious/noExplicitAny: any server transaction (its Id literal is irrelevant here)
+  ReturnType<typeof ServerTransaction.make<any, TSchema, TTransaction>>,
   "use"
 >;
 
