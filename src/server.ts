@@ -193,19 +193,18 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
   return yield* Effect.tryPromise({
     try: () =>
       handleQueryRequest(
-        (name, args) =>
-          Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
+        (name, args) => {
+          const exit = Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
             Effect.fromOption,
             Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
             Effect.runSyncExitWith(ctx),
-            Exit.match({
-              onSuccess: (v) => v,
-              onFailure: (cause) => {
-                throw new QueryUserError<E>({ cause });
-              },
-            }),
-          ),
+          );
+          if (Exit.isFailure(exit)) {
+            throw new QueryUserError<E>({ cause: exit.cause });
+          }
+          return exit.value;
+        },
         schema,
         payload as ReadonlyJSONValue,
       ),
