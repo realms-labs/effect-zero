@@ -8,6 +8,11 @@ export class ServerTransactionInput extends Context.Service<ServerTransactionInp
   prefixId("ServerTransactionInput"),
 ) {}
 
+export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
+  message = "No transaction detected in a mutation, a transaction is required.";
+}
+export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {}
+
 const OutOfOrderMutationErrorTypeId = Symbol.for(prefixId("OutOfOrderMutationError"));
 export class OutOfOrderMutationError extends Data.TaggedError("OutOfOrderMutationError")<{
   readonly clientID: string;

@@ -1,8 +1,8 @@
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { MultipleTransactionsError, NoTransactionError } from "./server.js";
 import { prefixId } from "./utils.js";
 
 export class ServerSynchronizationContext extends Context.Service<
@@ -63,7 +63,3 @@ export const finalize = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     );
   });
 
-export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
-  message = "No transaction detected in a mutation, a transaction is required.";
-}
-export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {}
