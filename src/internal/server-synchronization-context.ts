@@ -5,16 +5,16 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { MultipleTransactionsError, NoTransactionError } from "./server.js";
 import { prefixId } from "./utils.js";
 
-export class ServerSynchronizationContext extends Context.Service<
-  ServerSynchronizationContext,
-  { readonly wasTransactionExecuted: SynchronizedRef.SynchronizedRef<boolean> }
->()(prefixId("ServerSynchronizationContext"), {
-  make: Effect.gen(function* () {
-    return {
-      wasTransactionExecuted: yield* SynchronizedRef.make(false),
-    };
-  }),
-}) {}
+export class ServerSynchronizationContext extends Context.Service<ServerSynchronizationContext>()(
+  prefixId("ServerSynchronizationContext"),
+  {
+    make: Effect.gen(function* () {
+      return {
+        wasTransactionExecuted: yield* SynchronizedRef.make(false),
+      };
+    }),
+  },
+) {}
 
 export const layer: Layer.Layer<ServerSynchronizationContext> = Layer.effect(ServerSynchronizationContext)(
   ServerSynchronizationContext.make,
