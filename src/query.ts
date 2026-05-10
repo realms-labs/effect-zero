@@ -11,15 +11,6 @@ import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
-/**
- * Local replacement for `effect/Subscribable` (removed in Effect v4).
- * Models a current value with a stream of changes.
- */
-export interface Subscribable<A> {
-  readonly get: Effect.Effect<A>;
-  readonly changes: Stream.Stream<A>;
-}
-
 // biome-ignore lint/suspicious/noConfusingVoidType: necessary to allow Schema.Void
 type QueryArgs<A extends ReadonlyJSONValue | void, B> = { _tag: "Encoded"; args: A } | { _tag: "Decoded"; args: B };
 
@@ -125,13 +116,3 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
 export const initialValue = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   query: ZeroQuery<T, S, R>,
 ) => QueryResult.make<R>(getDefaultSnapshot(asQueryInternals(query).format.singular));
-
-export const subscribable = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
-  zero: Zero<S>,
-  query: ZeroQuery<T, S, R>,
-): Subscribable<QueryResult.QueryResult<R>> => ({
-  get: Effect.promise(() => zero.run(query, { type: "unknown" })).pipe(
-    Effect.map((value) => ({ _tag: "Partial", value }) satisfies QueryResult.QueryResult.Partial<R>),
-  ),
-  changes: stream(zero, query),
-});
