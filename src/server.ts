@@ -6,6 +6,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
+import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -15,7 +16,7 @@ import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
-import { prefixId } from "./internal/utils.js";
+import { normalizeArgs, prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
@@ -25,6 +26,8 @@ import type { TransformRequestMessage } from "./types/queries.js";
 // Updated to:
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
+
+type _ = NodeInspectSymbol;
 
 export const processPush = Effect.fn(function* <
   TSchema extends ZeroSchema,
@@ -90,9 +93,9 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     Effect.catchTag("NoSuchElementError", () => Effect.fail(new MutatorNotFoundError({ name: mutation.name }))),
   );
 
-  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
-    Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
-  );
+  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(
+    normalizeArgs(mutation.args[0]),
+  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))));
 
   return yield* mutator(args).pipe(
     ServerSynchronizationContext.finalize,

@@ -7,9 +7,8 @@ import { NoTransactionError } from "./server.js";
 import * as ServerSynchronizationContext from "./server-synchronization-context.js";
 
 describe("ServerSynchronizationContext", () => {
-  it.effect(
-    "finalize should return NoTransactionError when called without guard",
-    Effect.fn(function* () {
+  it.effect("finalize should return NoTransactionError when called without guard", () =>
+    Effect.gen(function* () {
       const result = yield* Effect.void.pipe(
         ServerSynchronizationContext.finalize,
         Effect.provide(ServerSynchronizationContext.layer),
