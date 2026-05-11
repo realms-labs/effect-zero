@@ -21,6 +21,7 @@ import { count, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { Chunk, Console, Context, Duration, Effect, Latch, Layer, Option, pipe, Schema, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
+import * as SchemaGetter from "effect/SchemaGetter";
 import * as ZfxClient from "effect-zero/client";
 import * as ZfxClientTransaction from "effect-zero/client-transaction";
 import * as ZfxMutators from "effect-zero/mutators";
@@ -226,9 +227,16 @@ const messagesQuery = ZfxQuery.make({
 
 const transformArgsQuerySpy = vi.fn();
 
+const DateFromNumber = Schema.Number.pipe(
+  Schema.decodeTo(Schema.Date, {
+    decode: SchemaGetter.transform((n: number) => new Date(n)),
+    encode: SchemaGetter.transform((d: Date) => d.getTime()),
+  }),
+);
+
 const transformArgsQuery = ZfxQuery.make({
   name: "transformArgs",
-  payload: Schema.DateFromNumber,
+  payload: DateFromNumber,
   query: Effect.fn(function* (a) {
     expectTypeOf<typeof a>().toEqualTypeOf<Date>();
     transformArgsQuerySpy(a);
