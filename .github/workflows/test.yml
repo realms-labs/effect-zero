@@ -13,6 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: oven-sh/setup-bun@v2
+      - name: Debug versions
+        run: |
+          node --version
+          which node
+          bun --version
       - uses: docker/setup-compose-action@v1
       - name: Install dependencies
         shell: bash
