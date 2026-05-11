@@ -16,7 +16,7 @@ import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
-import { prefixId } from "./internal/utils.js";
+import { normalizeArgs, prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
@@ -93,14 +93,9 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     Effect.catchTag("NoSuchElementError", () => Effect.fail(new MutatorNotFoundError({ name: mutation.name }))),
   );
 
-  // Zero unconditionally serializes arg-less mutator calls as `null` on the wire
-  // (https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-client/src/client/custom.ts).
-  // v3 `Schema.Void` happened to accept any input; v4 `Schema.Void` is strict
-  // `=== undefined`, so we renormalize before decoding (mirrors client.ts).
-  const rawArgs = mutation.args[0] === null ? undefined : mutation.args[0];
-  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(rawArgs).pipe(
-    Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
-  );
+  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(
+    normalizeArgs(mutation.args[0]),
+  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))));
 
   return yield* mutator(args).pipe(
     ServerSynchronizationContext.finalize,
