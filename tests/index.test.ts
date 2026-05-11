@@ -96,11 +96,11 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   messages: {
     create: (msg) =>
       clientTransaction.use(async (tx) => {
-        await tx.mutate.messages!.insert(msg);
+        await tx.mutate.messages.insert(msg);
       }),
     updateMessage: Effect.fn(function* (msg: { id: string; body: string }) {
       yield* clientTransaction.use(async (tx) => {
-        await tx.mutate.messages!.update(msg);
+        await tx.mutate.messages.update(msg);
       });
     }),
     deleteAll: Effect.fn(function* () {
@@ -170,7 +170,7 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
   yieldsErrorAfterTransaction: Effect.fn(function* () {
     yield* serverTransaction
       .use(async (tx) => {
-        await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
       })
       .pipe(serverTransaction.execute);
     yield* Effect.fail(new Error("error in yieldsErrorAfterTransaction"));
@@ -179,12 +179,12 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
   doubleTransaction: Effect.fn(function* () {
     yield* serverTransaction
       .use(async (tx) => {
-        await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
       })
       .pipe(serverTransaction.execute);
     yield* serverTransaction
       .use(async (tx) => {
-        await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
       })
       .pipe(serverTransaction.execute);
   }),
@@ -193,12 +193,12 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
       [
         serverTransaction
           .use(async (tx) => {
-            await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
           })
           .pipe(serverTransaction.execute),
         serverTransaction
           .use(async (tx) => {
-            await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
           })
           .pipe(serverTransaction.execute),
       ],
@@ -213,7 +213,7 @@ const messageByIdQuery = ZfxQuery.make({
   name: "messageById",
   payload: Schema.String,
   query: Effect.fn(function* (id) {
-    return yield* Effect.succeed(builder.messages!.where("id", id).one());
+    return yield* Effect.succeed(builder.messages.where("id", id).one());
   }),
 });
 
@@ -222,7 +222,7 @@ const messagesQuery = ZfxQuery.make({
   payload: Schema.Void,
   query: Effect.fn(function* () {
     // TODO: figure out why base queries (without `.limit()`) don't receive `completed` events
-    return yield* Effect.succeed(builder.messages!.limit(100));
+    return yield* Effect.succeed(builder.messages.limit(100));
   }),
 });
 
@@ -241,7 +241,7 @@ const transformArgsQuery = ZfxQuery.make({
   query: Effect.fn(function* (a) {
     expectTypeOf<typeof a>().toEqualTypeOf<Date>();
     transformArgsQuerySpy(a);
-    return yield* Effect.succeed(builder.messages!);
+    return yield* Effect.succeed(builder.messages);
   }),
 });
 
