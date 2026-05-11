@@ -298,49 +298,51 @@ const initZero = Effect.gen(function* () {
 let responses = Chunk.empty<PushResponse>();
 
 beforeAll(async () => {
-  const routes = HttpRouter.addAll([
-    HttpRouter.route(
-      "POST",
-      "/push",
-      Effect.gen(function* () {
-        const params = yield* HttpRouter.schemaParams(PushParams);
-        const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
-        const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
-        const responseBody = yield* Schema.encodeEffect(PushResponse)(result);
+  const pushRoute = HttpRouter.add(
+    "POST",
+    "/push",
+    Effect.gen(function* () {
+      const params = yield* HttpRouter.schemaParams(PushParams);
+      const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
+      const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
+      const responseBody = yield* Schema.encodeEffect(PushResponse)(result);
 
-        responses = Chunk.append(responses, responseBody);
+      responses = Chunk.append(responses, responseBody);
 
-        return (yield* HttpServerResponse.json(responseBody)).pipe(
-          HttpServerResponse.setStatus(200),
-          HttpServerResponse.setHeader("content-type", "application/json"),
-        );
-      }).pipe(
-        Effect.catch((e) =>
-          Effect.gen(function* () {
-            yield* Console.error("Push processor error:", e);
-            return HttpServerResponse.empty({ status: 500 });
-          }),
-        ),
+      return (yield* HttpServerResponse.json(responseBody)).pipe(
+        HttpServerResponse.setStatus(200),
+        HttpServerResponse.setHeader("content-type", "application/json"),
+      );
+    }).pipe(
+      Effect.catch((e) =>
+        Effect.gen(function* () {
+          yield* Console.error("Push processor error:", e);
+          return HttpServerResponse.empty({ status: 500 });
+        }),
       ),
     ),
-    HttpRouter.route(
-      "POST",
-      "/query",
-      Effect.gen(function* () {
-        const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-        const response = yield* ZfxServer.handleQuery(queries, schema, payload);
-        return yield* HttpServerResponse.json(response);
-      }).pipe(
-        Effect.catchCause(
-          Effect.fn(function* (c) {
-            yield* Effect.logError("query error:", c);
-            return HttpServerResponse.empty({ status: 500 });
-          }),
-        ),
+  );
+
+  const queryRoute = HttpRouter.add(
+    "POST",
+    "/query",
+    Effect.gen(function* () {
+      const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
+      const response = yield* ZfxServer.handleQuery(queries, schema, payload);
+      return yield* HttpServerResponse.json(response);
+    }).pipe(
+      Effect.catchCause(
+        Effect.fn(function* (c) {
+          yield* Effect.logError("query error:", c);
+          return HttpServerResponse.empty({ status: 500 });
+        }),
       ),
     ),
-    HttpRouter.route("GET", "/health", HttpServerResponse.text("OK")),
-  ]);
+  );
+
+  const healthRoute = HttpRouter.add("GET", "/health", HttpServerResponse.text("OK"));
+
+  const routes = Layer.mergeAll(pushRoute, queryRoute, healthRoute);
 
   const server = Effect.gen(function* () {
     const serverStarted = yield* Latch.make();

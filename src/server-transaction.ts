@@ -29,7 +29,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
   class Context extends Ctx.Service<
     Context,
     { transaction: ZeroServerTransaction<TSchema, TTransaction>; transactionHooks: TransactionProviderHooks }
-  >()(`${id}/ServerTransactionContext` as const) {}
+  >()(`${id as string}/ServerTransactionContext` as const) {}
 
   const use = <A>(
     fn: (
