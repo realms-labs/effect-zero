@@ -285,7 +285,7 @@ const initZero = Effect.gen(function* () {
     yield* pipe(
       stream,
       Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-      waitForLastItem,
+      (s) => waitForLastItem(s, Duration.seconds(2)),
       Effect.andThen((d) =>
         Effect.fail(new Error("not empty")).pipe(Effect.when(Effect.sync(() => d.value.length > 0))),
       ),
