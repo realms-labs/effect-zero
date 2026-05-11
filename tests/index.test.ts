@@ -11,7 +11,6 @@ dotenv.config({ quiet: true });
 
 import { createServer } from "node:http";
 import { beforeEach } from "node:test";
-import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { NodeHttpServer } from "@effect/platform-node";
 import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
 import { createBuilder } from "@rocicorp/zero";
@@ -21,6 +20,10 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { Chunk, Console, Context, Duration, Effect, Latch, Layer, Option, pipe, Schema, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
 import * as SchemaGetter from "effect/SchemaGetter";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import * as ZfxClient from "effect-zero/client";
@@ -295,8 +298,9 @@ const initZero = Effect.gen(function* () {
 let responses = Chunk.empty<PushResponse>();
 
 beforeAll(async () => {
-  const router = HttpRouter.empty.pipe(
-    HttpRouter.post(
+  const routes = HttpRouter.addAll([
+    HttpRouter.route(
+      "POST",
       "/push",
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(PushParams);
@@ -319,7 +323,8 @@ beforeAll(async () => {
         ),
       ),
     ),
-    HttpRouter.post(
+    HttpRouter.route(
+      "POST",
       "/query",
       Effect.gen(function* () {
         const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
@@ -334,13 +339,13 @@ beforeAll(async () => {
         ),
       ),
     ),
-    HttpRouter.get("/health", HttpServerResponse.text("OK")),
-  );
+    HttpRouter.route("GET", "/health", HttpServerResponse.text("OK")),
+  ]);
 
   const server = Effect.gen(function* () {
     const serverStarted = yield* Latch.make();
-    const app = router.pipe(
-      HttpServer.serve(),
+    const app = routes.pipe(
+      HttpRouter.serve,
       Layer.provide(NodeHttpServer.layer(() => createServer(), { port: 3000 })),
       Layer.tap(() => serverStarted.open),
     );
