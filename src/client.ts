@@ -25,7 +25,12 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
-      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
+      // Zero unconditionally serializes arg-less mutator calls as `null` on the wire
+      // (https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-client/src/client/custom.ts).
+      // v3 `Schema.Void` happened to accept any input; v4 `Schema.Void` is strict
+      // `=== undefined`, so we renormalize before decoding.
+      const input = args === null ? undefined : args;
+      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(input).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction.Context, tx),
