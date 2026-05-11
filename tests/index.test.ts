@@ -14,7 +14,6 @@ import { beforeEach } from "node:test";
 import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { NodeHttpServer } from "@effect/platform-node";
 import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
-import { Atom, Registry } from "@effect-atom/atom";
 import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count, eq } from "drizzle-orm";
@@ -22,6 +21,8 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { Chunk, Console, Context, Duration, Effect, Latch, Layer, Option, pipe, Schema, Stream } from "effect";
 import * as Predicate from "effect/Predicate";
 import * as SchemaGetter from "effect/SchemaGetter";
+import * as Atom from "effect/unstable/reactivity/Atom";
+import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import * as ZfxClient from "effect-zero/client";
 import * as ZfxClientTransaction from "effect-zero/client-transaction";
 import * as ZfxMutators from "effect-zero/mutators";
@@ -95,11 +96,11 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   messages: {
     create: (msg) =>
       clientTransaction.use(async (tx) => {
-        await tx.mutate.messages!.insert(msg);
+        await tx.mutate.messages.insert(msg);
       }),
     updateMessage: Effect.fn(function* (msg: { id: string; body: string }) {
       yield* clientTransaction.use(async (tx) => {
-        await tx.mutate.messages!.update(msg);
+        await tx.mutate.messages.update(msg);
       });
     }),
     deleteAll: Effect.fn(function* () {
@@ -169,7 +170,7 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
   yieldsErrorAfterTransaction: Effect.fn(function* () {
     yield* serverTransaction
       .use(async (tx) => {
-        await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
       })
       .pipe(serverTransaction.execute);
     yield* Effect.fail(new Error("error in yieldsErrorAfterTransaction"));
@@ -178,12 +179,12 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
   doubleTransaction: Effect.fn(function* () {
     yield* serverTransaction
       .use(async (tx) => {
-        await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
       })
       .pipe(serverTransaction.execute);
     yield* serverTransaction
       .use(async (tx) => {
-        await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+        await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
       })
       .pipe(serverTransaction.execute);
   }),
@@ -192,12 +193,12 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
       [
         serverTransaction
           .use(async (tx) => {
-            await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
           })
           .pipe(serverTransaction.execute),
         serverTransaction
           .use(async (tx) => {
-            await tx.mutate.messages!.insert({ id: nanoid(), body: "hello world" });
+            await tx.mutate.messages.insert({ id: nanoid(), body: "hello world" });
           })
           .pipe(serverTransaction.execute),
       ],
@@ -212,7 +213,7 @@ const messageByIdQuery = ZfxQuery.make({
   name: "messageById",
   payload: Schema.String,
   query: Effect.fn(function* (id) {
-    return yield* Effect.succeed(builder.messages!.where("id", id).one());
+    return yield* Effect.succeed(builder.messages.where("id", id).one());
   }),
 });
 
@@ -221,7 +222,7 @@ const messagesQuery = ZfxQuery.make({
   payload: Schema.Void,
   query: Effect.fn(function* () {
     // TODO: figure out why base queries (without `.limit()`) don't receive `completed` events
-    return yield* Effect.succeed(builder.messages!.limit(100));
+    return yield* Effect.succeed(builder.messages.limit(100));
   }),
 });
 
@@ -240,7 +241,7 @@ const transformArgsQuery = ZfxQuery.make({
   query: Effect.fn(function* (a) {
     expectTypeOf<typeof a>().toEqualTypeOf<Date>();
     transformArgsQuerySpy(a);
-    return yield* Effect.succeed(builder.messages!);
+    return yield* Effect.succeed(builder.messages);
   }),
 });
 
@@ -798,105 +799,6 @@ it.live(
 );
 
 it.live(
-  "Query.subscribable should work for singular queries",
-  Effect.fn(function* () {
-    const z = yield* initZero;
-
-    const value: Message = { id: nanoid(), body: "Hello, world!" };
-    yield* Effect.promise(() => ddb.insert(messages).values(value));
-
-    const q = yield* messageByIdQuery(value.id);
-    const sub = ZfxQuery.subscribable(z, q);
-
-    expect(yield* sub.get).toEqual({ _tag: "Partial", value: undefined });
-
-    {
-      const result = yield* pipe(
-        sub.changes,
-        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-        waitForLastItem,
-      );
-
-      expect(result.value).toEqual(value);
-    }
-  }),
-);
-
-it.live(
-  "Query.subscribable.get should always return the latest value for singular queries",
-  Effect.fn(function* () {
-    const z = yield* initZero;
-
-    const value: Message = { id: nanoid(), body: "Hello, world!" };
-    yield* Effect.promise(() => ddb.insert(messages).values(value));
-
-    const q = yield* messageByIdQuery(value.id);
-    const sub = ZfxQuery.subscribable(z, q);
-
-    expect(yield* sub.get).toEqual(expect.objectContaining({ _tag: "Partial", value: undefined }));
-
-    yield* Effect.sleep(Duration.millis(500));
-
-    expect(yield* sub.get).toEqual({ _tag: "Partial", value: expect.objectContaining(value) });
-  }),
-);
-
-it.live(
-  "Query.subscribable.get should always return the latest value for plural queries",
-  Effect.fn(function* () {
-    const z = yield* initZero;
-
-    const values: Message[] = [
-      { id: nanoid(), body: "Hello, world!" },
-      { id: nanoid(), body: "Hello, world!" },
-    ];
-    yield* Effect.promise(() => ddb.insert(messages).values(values));
-
-    const q = yield* messagesQuery();
-    const sub = ZfxQuery.subscribable(z, q);
-
-    expect(yield* sub.get).toEqual(expect.objectContaining({ _tag: "Partial", value: [] }));
-
-    yield* Effect.sleep(Duration.millis(500));
-
-    expect(yield* sub.get).toEqual({
-      _tag: "Partial",
-      value: expect.arrayContaining(values.map((v) => expect.objectContaining(v))),
-    });
-  }),
-);
-
-it.live(
-  "Query.subscribable should work for plural queries",
-  Effect.fn(function* () {
-    const z = yield* initZero;
-
-    Atom.subscriptionRef;
-
-    const values: Message[] = [
-      { id: nanoid(), body: "Hello, world!" },
-      { id: nanoid(), body: "Hello, world!" },
-    ];
-    yield* Effect.promise(() => ddb.insert(messages).values(values));
-
-    const q = yield* messagesQuery();
-    const sub = ZfxQuery.subscribable(z, q);
-
-    expect(yield* sub.get).toEqual({ _tag: "Partial", value: [] });
-
-    {
-      const result = yield* pipe(
-        sub.changes,
-        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-        waitForLastItem,
-      );
-
-      expect(result.value).toEqual(expect.arrayContaining(values));
-    }
-  }),
-);
-
-it.live(
   "Result.acceptPartialMode with 'acceptCached' should work for singular queries",
   Effect.fn(function* () {
     const value: Message = { id: nanoid(), body: "hello world" };
@@ -904,8 +806,7 @@ it.live(
     const z = yield* initZero;
 
     const q = yield* messageByIdQuery(value.id);
-    const sub = ZfxQuery.subscribable(z, q);
-    const atom = Atom.subscribable(Effect.succeed(sub)).pipe(
+    const atom = Atom.make(ZfxQuery.stream(z, q), { initialValue: ZfxQuery.initialValue(q) }).pipe(
       Atom.map(ZfxResult.make),
       Atom.map(ZfxResult.acceptPartialMode("acceptCached")),
     );
@@ -937,7 +838,7 @@ it.live(
         expect.objectContaining({ _tag: "Success", value: newValue }),
       ]);
     }
-  }, Effect.provide(Registry.layer)),
+  }, Effect.provide(AtomRegistry.layer)),
 );
 
 it.live(
@@ -946,8 +847,7 @@ it.live(
     const z = yield* initZero;
 
     const q = yield* messagesQuery();
-    const sub = ZfxQuery.subscribable(z, q);
-    const atom = Atom.subscribable(Effect.succeed(sub)).pipe(
+    const atom = Atom.make(ZfxQuery.stream(z, q), { initialValue: ZfxQuery.initialValue(q) }).pipe(
       Atom.map(ZfxResult.make),
       Atom.map(ZfxResult.acceptPartialMode("acceptCached")),
     );
@@ -983,7 +883,7 @@ it.live(
         expect.objectContaining({ _tag: "Success", value: expect.arrayContaining([...values, newValue]) }),
       ]);
     }
-  }, Effect.provide(Registry.layer)),
+  }, Effect.provide(AtomRegistry.layer)),
 );
 
 it.live(
@@ -994,8 +894,7 @@ it.live(
     const z = yield* initZero;
 
     const q = yield* messageByIdQuery(value.id);
-    const sub = ZfxQuery.subscribable(z, q);
-    const atom = Atom.subscribable(Effect.succeed(sub)).pipe(
+    const atom = Atom.make(ZfxQuery.stream(z, q), { initialValue: ZfxQuery.initialValue(q) }).pipe(
       Atom.map(ZfxResult.make),
       Atom.map(ZfxResult.acceptPartialMode("waitForServer")),
     );
@@ -1025,7 +924,7 @@ it.live(
 
       expect(changes).toEqual([expect.objectContaining({ _tag: "Success", value: newValue })]);
     }
-  }, Effect.provide(Registry.layer)),
+  }, Effect.provide(AtomRegistry.layer)),
 );
 
 it.live(
@@ -1034,8 +933,7 @@ it.live(
     const z = yield* initZero;
 
     const q = yield* messagesQuery();
-    const sub = ZfxQuery.subscribable(z, q);
-    const atom = Atom.subscribable(Effect.succeed(sub)).pipe(
+    const atom = Atom.make(ZfxQuery.stream(z, q), { initialValue: ZfxQuery.initialValue(q) }).pipe(
       Atom.map(ZfxResult.make),
       Atom.map(ZfxResult.acceptPartialMode("waitForServer")),
     );
@@ -1069,5 +967,5 @@ it.live(
         expect.objectContaining({ _tag: "Success", value: expect.arrayContaining([...values, newValue]) }),
       ]);
     }
-  }, Effect.provide(Registry.layer)),
+  }, Effect.provide(AtomRegistry.layer)),
 );
