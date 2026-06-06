@@ -14,6 +14,7 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
+import type * as Unify from "effect/Unify";
 import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { normalizeArgs, prefixId } from "./internal/utils.js";
@@ -28,6 +29,7 @@ import type { TransformRequestMessage } from "./types/queries.js";
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
 
 type _ = NodeInspectSymbol;
+type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
 export const processPush = Effect.fn(function* <
   TSchema extends ZeroSchema,

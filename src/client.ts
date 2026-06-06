@@ -8,11 +8,13 @@ import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
 import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 
 type _ = NodeInspectSymbol;
+type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
 export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
   transaction: ClientTransaction.Context<TSchema>,

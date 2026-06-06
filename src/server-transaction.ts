@@ -9,6 +9,7 @@ import * as Exit from "effect/Exit";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
+import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
 import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
@@ -17,6 +18,7 @@ import { prefixId } from "./internal/utils.js";
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
 type _ = NodeInspectSymbol;
+type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
 // biome-ignore lint/suspicious/noExplicitAny: any client transaction (its Id literal is irrelevant here)
 export type Context<TSchema extends ZeroSchema, TTransaction> = ReturnType<typeof make<any, TSchema, TTransaction>>;
