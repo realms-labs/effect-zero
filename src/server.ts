@@ -28,7 +28,7 @@ import type { TransformRequestMessage } from "./types/queries.js";
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 // https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
 
-type _ = NodeInspectSymbol;
+type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
 export const processPush = Effect.fn(function* <

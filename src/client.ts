@@ -13,7 +13,7 @@ import type * as ClientTransaction from "./client-transaction.js";
 import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 
-type _ = NodeInspectSymbol;
+type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
 export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(

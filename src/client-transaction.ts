@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import type * as Unify from "effect/Unify";
 
-type _ = NodeInspectSymbol;
+type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
 // biome-ignore lint/suspicious/noExplicitAny: any client transaction (its Id literal is irrelevant here)

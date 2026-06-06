@@ -17,7 +17,7 @@ import { prefixId } from "./internal/utils.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
 
-type _ = NodeInspectSymbol;
+type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
 // biome-ignore lint/suspicious/noExplicitAny: any client transaction (its Id literal is irrelevant here)
