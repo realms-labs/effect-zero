@@ -3,42 +3,42 @@ import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Match from "effect/Match";
-import type * as ParseResult from "effect/ParseResult";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
+import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
+import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 
-type ClientTransactionContext<TSchema extends ZeroSchema> = Omit<
-  ReturnType<typeof ClientTransaction.make<string, TSchema>>,
-  "use"
->;
+type _NodeInspectSymbol = NodeInspectSymbol;
+type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
 export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
-  transaction: ClientTransactionContext<TSchema>,
+  transaction: ClientTransaction.Context<TSchema>,
   mutators: TMutators,
   options: Omit<ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>, "schema" | "mutators">,
 ) {
-  const runtime =
-    yield* Effect.runtime<
-      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, ClientTransaction.ClientTransaction>
+  const ctx =
+    yield* Effect.context<
+      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction.Context)["Identifier"]>
     >();
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
-      const exit = await Schema.decode(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
-        Effect.catchTag("ParseError", (e) => new ClientArgsParseError({ cause: Cause.fail(e) })),
+      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
+        Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
-        Effect.provideService(transaction, tx),
-        Runtime.runPromiseExit(runtime),
+        Effect.provideService(transaction.Context, tx),
+        Effect.runPromiseExitWith(ctx),
       );
-      return Exit.getOrElse(exit, (c) => {
+      if (Exit.isFailure(exit)) {
         // Extract underlying error bypassing FiberFailure
-        throw Cause.squash(c);
-      });
+        throw Cause.squash(exit.cause);
+      }
+      return exit.value;
     };
   }
 
@@ -62,7 +62,7 @@ type UnwrapMutator<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMut
   ? (transaction: ZeroTransaction<TSchema>) => Promise<void>
   : (
       transaction: ZeroTransaction<TSchema>,
-      args: Schema.Schema.Encoded<TMutators[typeof Mutators.MutatorSchemaSymbol]>,
+      args: Schema.Codec.Encoded<TMutators[typeof Mutators.MutatorSchemaSymbol]>,
     ) => Promise<void>;
 
 type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators> = {
@@ -76,5 +76,5 @@ type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMu
 } & {};
 
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
-  readonly cause: Cause.Cause<ParseResult.ParseError>;
+  readonly cause: Cause.Cause<Schema.SchemaError>;
 }> {}

@@ -4,9 +4,9 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
 import * as Match from "effect/Match";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Subscribable from "effect/Subscribable";
 import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
@@ -32,15 +32,15 @@ export const make = <
   R2,
 >(options: {
   name: N;
-  payload: Schema.Schema<B, A, R1>;
+  payload: Schema.Codec<B, A, R1, R1>;
   query: (args: NoInfer<B>) => Effect.Effect<ZeroQuery<T, S, R>, E, R2>;
 }) => {
   const runQuery = Effect.fn(function* (args: QueryArgs<A, B>) {
     const { encoded, decoded } = yield* Match.valueTags(args, {
       Encoded: ({ args: encoded }) =>
-        Effect.map(Schema.decode(options.payload)(encoded), (decoded) => ({ encoded, decoded })),
+        Effect.map(Schema.decodeEffect(options.payload)(encoded), (decoded) => ({ encoded, decoded })),
       Decoded: ({ args: decoded }) =>
-        Effect.map(Schema.encode(options.payload)(decoded), (encoded) => ({ encoded, decoded })),
+        Effect.map(Schema.encodeEffect(options.payload)(decoded), (encoded) => ({ encoded, decoded })),
     });
 
     return yield* options.query(decoded).pipe(
@@ -88,8 +88,8 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
       (view) => Effect.sync(() => view.destroy()),
     );
 
-    return Stream.asyncEffect<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((emit) =>
-      Effect.sync(() => view.addListener((...args) => emit.single(args))),
+    return Stream.callback<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((queue) =>
+      Effect.sync(() => view.addListener((...args) => Queue.offerUnsafe(queue, args))),
     ).pipe(
       Stream.mapEffect(([data, resultType, error]) =>
         Effect.sync(() => {
@@ -102,27 +102,15 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
             // TODO: Look into this. It seems like this is difficult but not impossible to model in the Effect paradigm.
             // Likely need some kind of stateful piece between the publisher and and subscriber, allowing the subscriber to swap out
             // the publisher when this function is called.
-            () => Effect.dieMessage("retry not available in `effect-zero`"),
+            () => Effect.die("retry not available in `effect-zero`"),
             error,
           );
         }),
       ),
       Stream.map(QueryResult.make),
     );
-  }).pipe(Stream.unwrapScoped);
+  }).pipe(Stream.unwrap);
 
 export const initialValue = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   query: ZeroQuery<T, S, R>,
 ) => QueryResult.make<R>(getDefaultSnapshot(asQueryInternals(query).format.singular));
-
-export const subscribable = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
-  zero: Zero<S>,
-  query: ZeroQuery<T, S, R>,
-) => {
-  return Subscribable.make({
-    get: Effect.promise(() => zero.run(query, { type: "unknown" })).pipe(
-      Effect.map((value) => ({ _tag: "Partial", value }) satisfies QueryResult.QueryResult.Partial<R>),
-    ),
-    changes: stream(zero, query),
-  });
-};
