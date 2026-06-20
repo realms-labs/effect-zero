@@ -1,5 +1,5 @@
 import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
-import { handleQueryRequest } from "@rocicorp/zero/server";
+import { handleMutateRequest, handleQueryRequest, OutOfOrderMutation } from "@rocicorp/zero/server";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
@@ -7,21 +7,27 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
 import type { NodeInspectSymbol } from "effect/Inspectable";
+import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
-import { MutationAlreadyProcessedError, OutOfOrderMutationError, ServerTransactionInput } from "./internal/server.js";
+import {
+  MutatorNotFoundError,
+  ServerArgsParseError,
+  ServerTransactionInput,
+  toApplicationError,
+} from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { normalizeArgs, prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
-import * as Types from "./types/push.js";
+import type * as Types from "./types/push.js";
 import type { TransformRequestMessage } from "./types/queries.js";
 
 // Updated to:
@@ -31,7 +37,11 @@ import type { TransformRequestMessage } from "./types/queries.js";
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
-export const processPush = Effect.fn(function* <
+// A thin, Effect-ful wrapper around the upstream `handleMutateRequest`. It mirrors `handleQuery`:
+// upstream owns the per-mutation loop, last-mutation-id ordering, app-error responses and out-of-order
+// handling; we only resolve+run the matching Effect mutator for each mutation. The mutator drives the
+// actual transaction through `serverTransaction.execute`, which uses the upstream `transact` callback.
+export const handleMutate = Effect.fn(function* <
   TSchema extends ZeroSchema,
   TTransaction,
   TMutators extends Mutators.AnyMutators,
@@ -41,43 +51,78 @@ export const processPush = Effect.fn(function* <
   params: Types.PushParams,
   request: Types.PushBody,
 ) {
-  if (request.pushVersion !== 1) {
-    return { error: "unsupportedPushVersion" as const };
-  }
+  // Capture only the mutators' genuinely external requirements: the per-mutation plumbing services
+  // (the upstream `transact`, the response slot, the mutation input and the synchronization context)
+  // are provided per-mutation below, so they must not leak into `handleMutate`'s own requirements.
+  // The exclusion set is the exact union provided below, so `Effect.provide(ctx)` discharges the rest.
+  const ctx =
+    yield* Effect.context<
+      Exclude<
+        Mutators.ExtractMutatorsRequirements<TMutators>,
+        | (typeof transaction.Transact)["Identifier"]
+        | (typeof transaction.ResponseStore)["Identifier"]
+        | ServerTransactionInput
+        | ServerSynchronizationContext.ServerSynchronizationContext
+      >
+    >();
 
-  const responses = yield* Stream.fromIterable(request.mutations).pipe(
-    Stream.mapEffect(
-      Effect.fn(function* (mutation) {
-        if (mutation.type !== "custom") {
-          return yield* new CustomMutationExpectedError();
-        }
+  return yield* Effect.tryPromise({
+    try: () =>
+      handleMutateRequest(
+        transaction.database,
+        (transact, mutation) => {
+          const program = Effect.gen(function* () {
+            const responseStore = yield* Ref.make(Option.none<Awaited<ReturnType<typeof transact>>>());
 
-        return yield* processMutation<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
-          Effect.catch((e) => processMutationError(transaction, e)),
-          Effect.map((result) =>
-            Types.MutationResponse.make({ id: { id: mutation.id, clientID: mutation.clientID }, result }),
-          ),
-          Effect.provideService(ServerTransactionInput, {
-            clientID: mutation.clientID,
-            mutationID: mutation.id,
-            clientGroupID: request.clientGroupID,
-            upstreamSchema: params.schema,
-          }),
-          Effect.provide(ServerSynchronizationContext.layer),
-        );
-      }),
-    ),
-    // We only stop processing if the mutation is out of order.
-    // If the mutation has already been processed or if it returns an application error,
-    // we continue processing the next mutation.
-    Stream.takeUntil(({ result }) => Predicate.hasProperty(result, "error") && result.error === "oooMutation"),
-    Stream.runCollect,
-  );
+            const exit = yield* lookupAndDecode<Mutators.ExtractMutatorsRequirements<TMutators>>(
+              mutators,
+              mutation,
+            ).pipe(
+              Effect.flatMap(({ mutator, args }) => mutator(args).pipe(ServerSynchronizationContext.finalize)),
+              // Provide all per-mutation plumbing in a single layer so the residual requirement is a
+              // single `Exclude<..., union>` that exactly matches `ctx` and cancels to `never`.
+              Effect.provide([
+                Layer.succeed(transaction.Transact, transact),
+                Layer.succeed(transaction.ResponseStore, responseStore),
+                Layer.succeed(ServerTransactionInput, {
+                  clientID: mutation.clientID,
+                  mutationID: mutation.id,
+                  clientGroupID: request.clientGroupID,
+                  upstreamSchema: params.schema,
+                }),
+                ServerSynchronizationContext.layer,
+              ]),
+              Effect.exit,
+            );
 
-  return { mutations: responses } satisfies Types.PushResponse;
+            return { exit, response: yield* Ref.get(responseStore) };
+          }).pipe(Effect.provide(ctx));
+
+          return Effect.runPromise(program).then(({ exit, response }) => {
+            // A transaction ran: return its response (success, app error, or already-processed).
+            if (Option.isSome(response)) return response.value;
+            // No transaction ran: a pre-transaction failure (or NoTransactionError).
+            const cause = Exit.isFailure(exit) ? exit.cause : Cause.empty;
+            const error = Cause.squash(cause);
+            // Out-of-order must reach handleMutateRequest's top-level handler (-> PushFailed), so it
+            // must NOT be converted into an application error.
+            if (error instanceof OutOfOrderMutation) throw error;
+            throw toApplicationError(cause);
+          });
+        },
+        params,
+        request as ReadonlyJSONValue,
+      ),
+    // Mirrors handleQuery's QueryRequestError: only genuine infra/defect rejections reach here.
+    // (Out-of-order resolves to a top-level PushFailed value, so it does not land in this catch.)
+    catch: (e) => new HandleMutateError({ cause: Cause.fail(e) }),
+  });
 });
 
-const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Types.Mutation) {
+const lookupAndDecode = Effect.fn(function* <R>(
+  mutators: Mutators.AnyMutators<R>,
+  mutation: { readonly name: string; readonly args: ReadonlyArray<ReadonlyJSONValue> },
+) {
   // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
   const [namespace, name] = mutation.name.includes("|") ? Str.split(mutation.name, "|") : Str.split(mutation.name, ".");
 
@@ -99,86 +144,10 @@ const processMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R
     normalizeArgs(mutation.args[0]),
   ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))));
 
-  return yield* mutator(args).pipe(
-    ServerSynchronizationContext.finalize,
-    Effect.as<Types.MutationResult>({}),
-    Effect.catchIf(OutOfOrderMutationError.is, (e) =>
-      Effect.logError(e.message).pipe(
-        Effect.as({ error: "oooMutation", details: e.message } satisfies Types.ZeroError),
-      ),
-    ),
-    Effect.catchIf(MutationAlreadyProcessedError.is, (e) =>
-      Effect.logWarning(e.message).pipe(
-        Effect.as({ error: "alreadyProcessed", details: e.message } satisfies Types.ZeroError),
-      ),
-    ),
-    // Case #5 "Zero transactions then fail" / #6 "Fail before transaction"
-    // Catches all errors that are produced before the transaction is executed
-    Effect.catchCause((cause) => Effect.fail(new MutationUserError({ cause }))),
-  );
+  return { mutator, args };
 });
 
-const processMutationError = Effect.fn(function* <TSchema extends ZeroSchema, TTransaction>(
-  transaction: ServerTransaction.Context<TSchema, TTransaction>,
-  e: unknown,
-) {
-  const { clientID, mutationID } = yield* ServerTransactionInput;
-
-  yield* Effect.logError(`Unexpected error processing mutation ${mutationID} for client ${clientID}`, Cause.fail(e));
-
-  const errorMessage = Match.value(e).pipe(
-    Match.when(MutationUserError.is, (e) => e.message),
-    Match.orElse(() => "Internal error"),
-  );
-
-  const appError = {
-    error: "app",
-    details: errorMessage,
-  } satisfies Types.AppError;
-
-  yield* transaction
-    .execute(
-      Effect.gen(function* () {
-        const { transactionHooks } = yield* transaction.Context;
-        return yield* Effect.tryPromise({
-          try: () => transactionHooks.writeMutationResult({ id: { id: mutationID, clientID }, result: appError }),
-          catch: (error) => new WriteMutationResultError({ cause: Cause.fail(error) }),
-        });
-      }),
-    )
-    .pipe(Effect.catchCause(Effect.logError));
-
-  yield* Effect.logWarning(`Mutation ${mutationID} for client ${clientID} was retried after an error: ${e}`);
-
-  return appError;
-});
-
-class WriteMutationResultError extends Data.TaggedError("WriteMutationResultError")<{
-  readonly cause: Cause.Cause<unknown>;
-}> {}
-class CustomMutationExpectedError extends Data.TaggedError("CustomMutationExpectedError") {}
-class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
-  readonly name: string;
-}> {}
-
-class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
-  readonly cause: Cause.Cause<Schema.SchemaError>;
-}> {}
-
-const MutationUserErrorTypeId = Symbol.for(prefixId("MutationUserError"));
-class MutationUserError extends Data.TaggedError("MutationUserError")<{
-  readonly cause: Cause.Cause<unknown>;
-}> {
-  readonly [MutationUserErrorTypeId] = MutationUserErrorTypeId;
-  static is(e: unknown): e is MutationUserError {
-    return Predicate.hasProperty(e, MutationUserErrorTypeId);
-  }
-
-  override get message() {
-    const err = Cause.squash(this.cause);
-    return err instanceof Error ? err.message : "exception was not of type `Error`";
-  }
-}
+class HandleMutateError extends Data.TaggedError("HandleMutateError")<{ readonly cause: Cause.Cause<unknown> }> {}
 
 export const handleQuery = Effect.fn(function* <E, R1, R2>(
   queries: MakeQueryResult<E, R1, R2>[],

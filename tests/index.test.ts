@@ -33,7 +33,7 @@ import * as ZfxQuery from "effect-zero/query";
 import * as ZfxResult from "effect-zero/result";
 import * as ZfxServer from "effect-zero/server";
 import * as ZfxServerTransaction from "effect-zero/server-transaction";
-import { PushBody, PushParams, PushResponse } from "effect-zero/types/push";
+import { PushBody, PushParams, type PushResponse } from "effect-zero/types/push";
 import { TransformRequestMessage } from "effect-zero/types/queries";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
@@ -304,12 +304,12 @@ beforeAll(async () => {
     Effect.gen(function* () {
       const params = yield* HttpRouter.schemaParams(PushParams);
       const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
-      const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
-      const responseBody = yield* Schema.encodeEffect(PushResponse)(result);
+      // `handleMutate` returns the upstream push response already in wire format, so no encoding step.
+      const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, payload);
 
-      responses = Chunk.append(responses, responseBody);
+      responses = Chunk.append(responses, result as unknown as PushResponse);
 
-      return (yield* HttpServerResponse.json(responseBody)).pipe(
+      return (yield* HttpServerResponse.json(result)).pipe(
         HttpServerResponse.setStatus(200),
         HttpServerResponse.setHeader("content-type", "application/json"),
       );
@@ -367,8 +367,8 @@ test("server is running", async () => {
   await expect(response.text()).resolves.toEqual("OK");
 });
 
-test("processPush has no extra requirements", () => {
-  const effect = ZfxServer.processPush(serverTransaction, serverMutators, {} as any, {} as any);
+test("handleMutate has no extra requirements", () => {
+  const effect = ZfxServer.handleMutate(serverTransaction, serverMutators, {} as any, {} as any);
 
   expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
 });
@@ -416,7 +416,7 @@ test("mutator requirements should propagate", () => {
       yield* DummyTag2;
     }),
   });
-  const serverEffect = ZfxServer.processPush(serverTransaction, mutators, {} as any, {} as any);
+  const serverEffect = ZfxServer.handleMutate(serverTransaction, mutators, {} as any, {} as any);
 
   expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
@@ -696,14 +696,16 @@ it.live(
     /*
     In case of "out of order" error, the mutation promise is not rejected, but retried under the hood.
     Since it won't ever be resolved or rejected in our case, we just run the mutation and check that
-    the last server response was "oooMutation" error.
+    the last server response was a top-level "PushFailed" error with reason "oooMutation".
+    (Upstream Zero reworked out-of-order handling into a top-level push error that stops the batch,
+    rather than a per-mutation `oooMutation` result.)
   */
     z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server.then();
 
     yield* Effect.sleep(Duration.millis(100));
 
     const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
-    expect(lastResponse).toHaveProperty(["mutations", 0, "result", "error"], "oooMutation");
+    expect(lastResponse).toMatchObject({ kind: "PushFailed", origin: "server", reason: "oooMutation" });
   }),
 );
 
