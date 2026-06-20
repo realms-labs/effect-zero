@@ -1,15 +1,8 @@
-import type { TransactionProviderInput } from "@rocicorp/zero/server";
 import { ApplicationError } from "@rocicorp/zero/server";
 import * as Cause from "effect/Cause";
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
-import { prefixId } from "./utils.js";
-
-export class ServerTransactionInput extends Context.Service<ServerTransactionInput, TransactionProviderInput>()(
-  prefixId("ServerTransactionInput"),
-) {}
 
 export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
   message = "No transaction detected in a mutation, a transaction is required.";

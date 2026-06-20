@@ -16,12 +16,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
-import {
-  MutatorNotFoundError,
-  ServerArgsParseError,
-  ServerTransactionInput,
-  toApplicationError,
-} from "./internal/server.js";
+import { MutatorNotFoundError, ServerArgsParseError, toApplicationError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { normalizeArgs, prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
@@ -52,17 +47,14 @@ export const handleMutate = Effect.fn(function* <
   request: Types.PushBody,
 ) {
   // Capture only the mutators' genuinely external requirements: the per-mutation plumbing services
-  // (the upstream `transact`, the response slot, the mutation input and the synchronization context)
-  // are provided per-mutation below, so they must not leak into `handleMutate`'s own requirements.
-  // The exclusion set is the exact union provided below, so `Effect.provide(ctx)` discharges the rest.
+  // (the `Mutation` channel and the synchronization context) are provided per-mutation below, so they
+  // must not leak into `handleMutate`'s own requirements. The exclusion set is the exact union provided
+  // below, so `Effect.provide(ctx)` discharges the rest.
   const ctx =
     yield* Effect.context<
       Exclude<
         Mutators.ExtractMutatorsRequirements<TMutators>,
-        | (typeof transaction.Transact)["Identifier"]
-        | (typeof transaction.ResponseStore)["Identifier"]
-        | ServerTransactionInput
-        | ServerSynchronizationContext.ServerSynchronizationContext
+        (typeof transaction.Mutation)["Identifier"] | ServerSynchronizationContext.ServerSynchronizationContext
       >
     >();
 
@@ -79,17 +71,10 @@ export const handleMutate = Effect.fn(function* <
               mutation,
             ).pipe(
               Effect.flatMap(({ mutator, args }) => mutator(args).pipe(ServerSynchronizationContext.finalize)),
-              // Provide all per-mutation plumbing in a single layer so the residual requirement is a
+              // Provide the per-mutation plumbing in a single layer so the residual requirement is a
               // single `Exclude<..., union>` that exactly matches `ctx` and cancels to `never`.
               Effect.provide([
-                Layer.succeed(transaction.Transact, transact),
-                Layer.succeed(transaction.ResponseStore, responseStore),
-                Layer.succeed(ServerTransactionInput, {
-                  clientID: mutation.clientID,
-                  mutationID: mutation.id,
-                  clientGroupID: request.clientGroupID,
-                  upstreamSchema: params.schema,
-                }),
+                Layer.succeed(transaction.Mutation, { transact, response: responseStore }),
                 ServerSynchronizationContext.layer,
               ]),
               Effect.exit,

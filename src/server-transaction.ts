@@ -12,7 +12,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
-import { ServerTransactionInput, toApplicationError } from "./internal/server.js";
+import { toApplicationError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
@@ -32,20 +32,17 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
   // The per-mutation `MutationResponse` produced by the upstream `transact`.
   type MutationResponse = Awaited<ReturnType<TransactFn<Database>>>;
 
-  class Context extends Ctx.Service<Context, { transaction: ZeroServerTransaction<TSchema, TTransaction> }>()(
+  // The live Zero transaction, available only while a `transact` callback is executing.
+  class Context extends Ctx.Service<Context, ZeroServerTransaction<TSchema, TTransaction>>()(
     `${id as string}/ServerTransactionContext` as const,
   ) {}
 
-  // The upstream `transact` for the mutation currently being processed, supplied per-mutation by `handleMutate`.
-  class Transact extends Ctx.Service<Transact, TransactFn<Database>>()(
-    `${id as string}/ServerTransactionTransact` as const,
-  ) {}
-
-  // A per-mutation slot where `execute` publishes the `MutationResponse` it got back from `transact`,
-  // so `handleMutate`'s callback can return it.
-  class ResponseStore extends Ctx.Service<ResponseStore, Ref.Ref<Option.Option<MutationResponse>>>()(
-    `${id as string}/ServerTransactionResponseStore` as const,
-  ) {}
+  // The per-mutation channel between `handleMutate` and `execute`: the upstream `transact` to run the
+  // transaction with, and a slot where `execute` publishes the resulting `MutationResponse`.
+  class Mutation extends Ctx.Service<
+    Mutation,
+    { readonly transact: TransactFn<Database>; readonly response: Ref.Ref<Option.Option<MutationResponse>> }
+  >()(`${id as string}/ServerTransactionMutation` as const) {}
 
   const use = <A>(
     fn: (
@@ -54,17 +51,16 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     ) => PromiseLike<A>,
   ) =>
     Effect.gen(function* () {
-      const ctx = yield* Context;
+      const transaction = yield* Context;
       return yield* Effect.tryPromise({
-        try: (signal) => fn(ctx.transaction, { signal }),
+        try: (signal) => fn(transaction, { signal }),
         catch: (error) => new ServerTransactionError({ cause: Cause.fail(error) }),
       });
     });
 
   const execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
     const ctx = yield* Effect.context<Exclude<R, (typeof clientTransaction.Context)["Identifier"] | Context>>();
-    const transact = yield* Transact;
-    const responseStore = yield* ResponseStore;
+    const { transact, response: responseStore } = yield* Mutation;
     // Bridges the inner effect's value/failure back out of the async `transact` callback to the mutator.
     const result = yield* Deferred.make<A, E | MutationShortCircuit>();
 
@@ -77,7 +73,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
         transact(async (transaction) => {
           const exit = await effect.pipe(
             Effect.provide([
-              Layer.succeed(Context, { transaction }),
+              Layer.succeed(Context, transaction),
               Layer.succeed(clientTransaction.Context, transaction),
             ]),
             (eff) => Effect.runPromiseExitWith(ctx)(eff, { signal }),
@@ -103,7 +99,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     return yield* Deferred.await(result);
   }, ServerSynchronizationContext.guard);
 
-  return { Context, Transact, ResponseStore, database, use, execute };
+  return { Context, Mutation, database, use, execute };
 };
 
 class ServerTransactionError extends Data.TaggedError("ServerTransactionError")<{
