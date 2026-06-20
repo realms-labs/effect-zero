@@ -12,7 +12,6 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
@@ -63,28 +62,27 @@ export const handleMutate = Effect.fn(function* <
       handleMutateRequest(
         transaction.database,
         (transact, mutation) => {
-          const program = Effect.gen(function* () {
-            const responseStore = yield* Ref.make(Option.none<Awaited<ReturnType<typeof transact>>>());
+          // Wrap the upstream `transact` so this mutation's `MutationResponse` is captured for us to
+          // return. `execute` only ever sees this single wrapped function (the `Mutation` service) —
+          // it does not deal with the response slot.
+          let response = Option.none<Awaited<ReturnType<typeof transact>>>();
+          const runTransact: typeof transact = (callback) =>
+            transact(callback).then((mutationResponse) => {
+              response = Option.some(mutationResponse);
+              return mutationResponse;
+            });
 
-            const exit = yield* lookupAndDecode<Mutators.ExtractMutatorsRequirements<TMutators>>(
-              mutators,
-              mutation,
-            ).pipe(
-              Effect.flatMap(({ mutator, args }) => mutator(args).pipe(ServerSynchronizationContext.finalize)),
-              // Provide the per-mutation plumbing in a single layer so the residual requirement is a
-              // single `Exclude<..., union>` that exactly matches `ctx` and cancels to `never`.
-              Effect.provide([
-                Layer.succeed(transaction.Mutation, { transact, response: responseStore }),
-                ServerSynchronizationContext.layer,
-              ]),
-              Effect.exit,
-            );
+          const program = lookupAndDecode<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
+            Effect.flatMap(({ mutator, args }) => mutator(args).pipe(ServerSynchronizationContext.finalize)),
+            // Provide the per-mutation plumbing in a single layer so the residual requirement is a
+            // single `Exclude<..., union>` that exactly matches `ctx` and cancels to `never`.
+            Effect.provide([Layer.succeed(transaction.Mutation, runTransact), ServerSynchronizationContext.layer]),
+            Effect.exit,
+            Effect.provide(ctx),
+          );
 
-            return { exit, response: yield* Ref.get(responseStore) };
-          }).pipe(Effect.provide(ctx));
-
-          return Effect.runPromise(program).then(({ exit, response }) => {
-            // A transaction ran: return its response (success, app error, or already-processed).
+          return Effect.runPromise(program).then((exit) => {
+            // A transaction ran: return its captured response (success, app error, or already-processed).
             if (Option.isSome(response)) return response.value;
             // No transaction ran: a pre-transaction failure (or NoTransactionError).
             const cause = Exit.isFailure(exit) ? exit.cause : Cause.empty;

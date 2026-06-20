@@ -8,8 +8,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
 import { toApplicationError } from "./internal/server.js";
@@ -29,20 +27,17 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
   clientTransaction: ClientTransaction.Context<TSchema>,
 ) => {
   type Database = ZQLDatabase<TSchema, TTransaction>;
-  // The per-mutation `MutationResponse` produced by the upstream `transact`.
-  type MutationResponse = Awaited<ReturnType<TransactFn<Database>>>;
 
   // The live Zero transaction, available only while a `transact` callback is executing.
   class Context extends Ctx.Service<Context, ZeroServerTransaction<TSchema, TTransaction>>()(
     `${id as string}/ServerTransactionContext` as const,
   ) {}
 
-  // The per-mutation channel between `handleMutate` and `execute`: the upstream `transact` to run the
-  // transaction with, and a slot where `execute` publishes the resulting `MutationResponse`.
-  class Mutation extends Ctx.Service<
-    Mutation,
-    { readonly transact: TransactFn<Database>; readonly response: Ref.Ref<Option.Option<MutationResponse>> }
-  >()(`${id as string}/ServerTransactionMutation` as const) {}
+  // The capability `execute` uses to run this mutation's transaction: the upstream `transact`, wrapped
+  // by `handleMutate` so the resulting `MutationResponse` is also captured for it to return.
+  class Mutation extends Ctx.Service<Mutation, TransactFn<Database>>()(
+    `${id as string}/ServerTransactionMutation` as const,
+  ) {}
 
   const use = <A>(
     fn: (
@@ -60,11 +55,11 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
 
   const execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
     const ctx = yield* Effect.context<Exclude<R, (typeof clientTransaction.Context)["Identifier"] | Context>>();
-    const { transact, response: responseStore } = yield* Mutation;
+    const transact = yield* Mutation;
     // Bridges the inner effect's value/failure back out of the async `transact` callback to the mutator.
     const result = yield* Deferred.make<A, E | MutationShortCircuit>();
 
-    const response = yield* Effect.tryPromise({
+    yield* Effect.tryPromise({
       try: (signal) =>
         // The upstream `transact` opens the DB transaction, runs the last-mutation-id check
         // (throwing OutOfOrderMutation / already-processed itself), invokes this callback to perform
@@ -91,10 +86,9 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
         error instanceof OutOfOrderMutation ? error : new ExecuteTransactError({ cause: Cause.fail(error) }),
     });
 
-    yield* Ref.set(responseStore, Option.some(response));
     // If `transact` resolved without ever invoking our callback (e.g. an already-processed mutation,
     // whose last-mutation-id check fails before the callback runs), `result` was never completed.
-    // Fail it (a no-op when already done) so we surface the stashed response instead of hanging.
+    // Fail it (a no-op when already done) so `handleMutate` surfaces the captured response instead of hanging.
     yield* Deferred.fail(result, new MutationShortCircuit());
     return yield* Deferred.await(result);
   }, ServerSynchronizationContext.guard);
