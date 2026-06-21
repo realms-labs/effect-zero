@@ -7,16 +7,15 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
 import type { NodeInspectSymbol } from "effect/Inspectable";
-import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import type * as Unify from "effect/Unify";
 import { MutatorNotFoundError, ServerArgsParseError, toApplicationError } from "./internal/server.js";
-import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { normalizeArgs, prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
@@ -45,16 +44,12 @@ export const handleMutate = Effect.fn(function* <
   params: Types.PushParams,
   request: Types.PushBody,
 ) {
-  // Capture only the mutators' genuinely external requirements: the per-mutation plumbing services
-  // (the `Mutation` channel and the synchronization context) are provided per-mutation below, so they
-  // must not leak into `handleMutate`'s own requirements. The exclusion set is the exact union provided
-  // below, so `Effect.provide(ctx)` discharges the rest.
+  // Capture only the mutators' genuinely external requirements: the per-mutation `Mutation` service is
+  // provided per-mutation below, so it must not leak into `handleMutate`'s own requirements. The
+  // exclusion exactly matches what is provided, so `Effect.provide(ctx)` discharges the rest.
   const ctx =
     yield* Effect.context<
-      Exclude<
-        Mutators.ExtractMutatorsRequirements<TMutators>,
-        (typeof transaction.Mutation)["Identifier"] | ServerSynchronizationContext.ServerSynchronizationContext
-      >
+      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction.Mutation)["Identifier"]>
     >();
 
   return yield* Effect.tryPromise({
@@ -72,14 +67,16 @@ export const handleMutate = Effect.fn(function* <
               return mutationResponse;
             });
 
-          const program = lookupAndDecode<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
-            Effect.flatMap(({ mutator, args }) => mutator(args).pipe(ServerSynchronizationContext.finalize)),
-            // Provide the per-mutation plumbing in a single layer so the residual requirement is a
-            // single `Exclude<..., union>` that exactly matches `ctx` and cancels to `never`.
-            Effect.provide([Layer.succeed(transaction.Mutation, runTransact), ServerSynchronizationContext.layer]),
-            Effect.exit,
-            Effect.provide(ctx),
-          );
+          const program = Effect.gen(function* () {
+            const executed = yield* SynchronizedRef.make(false);
+            return yield* lookupAndDecode<Mutators.ExtractMutatorsRequirements<TMutators>>(mutators, mutation).pipe(
+              Effect.flatMap(({ mutator, args }) => transaction.finalize(mutator(args))),
+              // Provide the single per-mutation `Mutation` service (wrapped transact + sync flag) so the
+              // residual requirement is `Exclude<..., Mutation>`, which exactly matches `ctx`.
+              Effect.provideService(transaction.Mutation, { transact: runTransact, executed }),
+              Effect.exit,
+            );
+          }).pipe(Effect.provide(ctx));
 
           return Effect.runPromise(program).then((exit) => {
             // A transaction ran: return its captured response (success, app error, or already-processed).

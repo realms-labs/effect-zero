@@ -7,10 +7,11 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Layer from "effect/Layer";
+import type * as SynchronizedRef from "effect/SynchronizedRef";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
 import { toApplicationError } from "./internal/server.js";
-import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
+import { finalize, guard } from "./internal/server-synchronization-context.js";
 
 // Updated to: https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
 
@@ -32,11 +33,13 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     `${id as string}/ServerTransactionContext` as const,
   ) {}
 
-  // The capability `execute` uses to run this mutation's transaction: the upstream `transact`, wrapped
-  // by `handleMutate` so the resulting `MutationResponse` is also captured for it to return.
-  class Mutation extends Ctx.Service<Mutation, TransactFn<Database>>()(
-    `${id as string}/ServerTransactionMutation` as const,
-  ) {}
+  // The per-mutation channel `execute` and `finalize` use: the upstream `transact` (wrapped by
+  // `handleMutate` to capture its response) plus the synchronization flag tracking whether a
+  // transaction has committed (formerly a separate ServerSynchronizationContext service).
+  class Mutation extends Ctx.Service<
+    Mutation,
+    { readonly transact: TransactFn<Database>; readonly executed: SynchronizedRef.SynchronizedRef<boolean> }
+  >()(`${id as string}/ServerTransactionMutation` as const) {}
 
   const use = <A>(
     fn: (
@@ -54,7 +57,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
 
   const execute = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
     const ctx = yield* Effect.context<Exclude<R, (typeof clientTransaction.Context)["Identifier"] | Context>>();
-    const transact = yield* Mutation;
+    const { transact } = yield* Mutation;
     // Captures the inner effect's Exit out of the async `transact` callback. Upstream awaits the callback
     // before `transact` resolves, so a plain closure variable suffices — no Deferred rendezvous needed.
     let exit: Exit.Exit<A, E> | undefined;
@@ -90,9 +93,9 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     // `handleMutate` surfaces the captured response instead of hanging.
     if (exit === undefined) return yield* new MutationShortCircuit();
     return yield* exit;
-  }, ServerSynchronizationContext.guard);
+  }, guard(Mutation));
 
-  return { Context, Mutation, database, use, execute };
+  return { Context, Mutation, database, use, execute, finalize: finalize(Mutation) };
 };
 
 class ServerTransactionError extends Data.TaggedError("ServerTransactionError")<{
