@@ -5,19 +5,16 @@ import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fn from "effect/Function";
 import type { NodeInspectSymbol } from "effect/Inspectable";
-import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as Rec from "effect/Record";
-import * as Schema from "effect/Schema";
-import * as Str from "effect/String";
+import type * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import type * as Unify from "effect/Unify";
+import { decodeArgs, lookupLeaf } from "./internal/mutator-tree.js";
 import { MutatorNotFoundError, ServerArgsParseError, toApplicationError } from "./internal/server.js";
-import { normalizeArgs, prefixId } from "./internal/utils.js";
-import * as Mutators from "./mutators.js";
+import { prefixId } from "./internal/utils.js";
+import type * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
 import type * as Types from "./types/push.js";
@@ -103,26 +100,14 @@ const lookupAndDecode = Effect.fn(function* <R>(
   mutators: Mutators.AnyMutators<R>,
   mutation: { readonly name: string; readonly args: ReadonlyArray<ReadonlyJSONValue> },
 ) {
-  // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
-  const [namespace, name] = mutation.name.includes("|") ? Str.split(mutation.name, "|") : Str.split(mutation.name, ".");
-
-  const mutator = yield* Fn.pipe(
-    mutators,
-    Rec.get<string>(namespace),
-    Option.flatMap((mutator) =>
-      Match.value([mutator, name]).pipe(
-        Match.when([Predicate.isObject, Predicate.isString], ([mutator, name]) => Rec.get<string>(name)(mutator)),
-        Match.when([Predicate.isFunction, Predicate.isUndefined], ([mutator]) => Option.some(mutator)),
-        Match.orElse(() => Option.none()),
-      ),
-    ),
+  const mutator = yield* lookupLeaf(mutators, mutation.name).pipe(
     Effect.fromOption,
     Effect.catchTag("NoSuchElementError", () => Effect.fail(new MutatorNotFoundError({ name: mutation.name }))),
   );
 
-  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(
-    normalizeArgs(mutation.args[0]),
-  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))));
+  const args = yield* decodeArgs(mutator, mutation.args[0]).pipe(
+    Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
+  );
 
   return { mutator, args };
 });

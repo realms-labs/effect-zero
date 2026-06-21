@@ -4,14 +4,11 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type { NodeInspectSymbol } from "effect/Inspectable";
-import * as Match from "effect/Match";
-import * as Predicate from "effect/Predicate";
-import * as Rec from "effect/Record";
-import * as Schema from "effect/Schema";
+import type * as Schema from "effect/Schema";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
-import { normalizeArgs } from "./internal/utils.js";
-import * as Mutators from "./mutators.js";
+import { decodeArgs, mapLeaves } from "./internal/mutator-tree.js";
+import type * as Mutators from "./mutators.js";
 
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
@@ -26,9 +23,9 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
       Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction.Context)["Identifier"]>
     >();
 
-  function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
+  function unwrapMutator(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>>) {
     return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
-      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
+      const exit = await decodeArgs(mutator, args).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction.Context, tx),
@@ -42,9 +39,10 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
     };
   }
 
-  const unwrappedMutators = Rec.map(mutators, (v) =>
-    Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
-  ) as ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>["mutators"];
+  const unwrappedMutators = mapLeaves(mutators, unwrapMutator) as ZeroOptions<
+    TSchema,
+    UnwrapMutators<TSchema, TMutators>
+  >["mutators"];
 
   return yield* Effect.acquireRelease(
     Effect.sync(() => {
