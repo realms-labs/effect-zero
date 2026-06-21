@@ -1,5 +1,7 @@
 import type { HumanReadable, ReadonlyJSONValue, Zero, Query as ZeroQuery, Schema as ZeroSchema } from "@rocicorp/zero";
 import { asQueryInternals } from "@rocicorp/zero/bindings";
+import * as Arr from "effect/Array";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
@@ -9,7 +11,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
-import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
+import { deepClone } from "./snapshot.js";
 
 // biome-ignore lint/suspicious/noConfusingVoidType: necessary to allow Schema.Void
 type QueryArgs<A extends ReadonlyJSONValue | void, B> = { _tag: "Encoded"; args: A } | { _tag: "Decoded"; args: B };
@@ -78,6 +80,25 @@ export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   typeof make<string, any, any, string, ZeroSchema, Record<string, any> | undefined, E, R1, R2>
 >;
 
+export class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> {
+  override get message() {
+    return `Query not found: ${this.name}`;
+  }
+}
+
+// Find a query by its name and run it from its encoded (wire) arguments. Owns the query-tree lookup
+// protocol (the name/run symbols) so the server handler doesn't have to know about it.
+export const runEncodedByName = <E, R1, R2>(
+  queries: MakeQueryResult<E, R1, R2>[],
+  name: string,
+  args: ReadonlyJSONValue | undefined,
+) =>
+  Arr.findFirst(queries, (query) => query[QueryNameSymbol] === name).pipe(
+    Effect.fromOption,
+    Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
+    Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
+  );
+
 export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   zero: Zero<S>,
   query: ZeroQuery<T, S, R>,
@@ -95,7 +116,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
         Effect.sync(() => {
           // logic here borrowed from: https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/zero-react/src/use-query.tsx#L543
           const cloned = data === undefined ? data : (deepClone(data as ReadonlyJSONValue) as HumanReadable<R>);
-          return getSnapshot<R>(
+          return QueryResult.fromView<R>(
             asQueryInternals(query).format.singular,
             cloned,
             resultType,
@@ -107,10 +128,9 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
           );
         }),
       ),
-      Stream.map(QueryResult.make),
     );
   }).pipe(Stream.unwrap);
 
 export const initialValue = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   query: ZeroQuery<T, S, R>,
-) => QueryResult.make<R>(getDefaultSnapshot(asQueryInternals(query).format.singular));
+) => QueryResult.initial<R>(asQueryInternals(query).format.singular);

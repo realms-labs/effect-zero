@@ -1,6 +1,5 @@
 import type { ReadonlyJSONValue, Schema as ZeroSchema } from "@rocicorp/zero";
 import { handleMutateRequest, handleQueryRequest, OutOfOrderMutation } from "@rocicorp/zero/server";
-import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -18,7 +17,7 @@ import type * as Unify from "effect/Unify";
 import { MutatorNotFoundError, ServerArgsParseError, toApplicationError } from "./internal/server.js";
 import { normalizeArgs, prefixId } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
-import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
+import { type MakeQueryResult, type QueryNotFound, runEncodedByName } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
 import type * as Types from "./types/push.js";
 import type { TransformRequestMessage } from "./types/queries.js";
@@ -139,18 +138,12 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
     try: () =>
       handleQueryRequest(
         (name, args) =>
-          Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
-            Effect.fromOption,
-            Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
-            Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
-            Effect.runSyncExitWith(ctx),
-            (exit) => {
-              if (Exit.isFailure(exit)) {
-                throw new QueryUserError<E>({ cause: exit.cause });
-              }
-              return exit.value;
-            },
-          ),
+          runEncodedByName(queries, name, args).pipe(Effect.runSyncExitWith(ctx), (exit) => {
+            if (Exit.isFailure(exit)) {
+              throw new QueryUserError<E>({ cause: exit.cause });
+            }
+            return exit.value;
+          }),
         schema,
         payload as ReadonlyJSONValue,
       ),
@@ -161,12 +154,6 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
       ),
   });
 });
-
-class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> {
-  override get message() {
-    return `Query not found: ${this.name}`;
-  }
-}
 
 const QueryUserErrorTypeId = Symbol.for(prefixId("QueryUserError"));
 class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{

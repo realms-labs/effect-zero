@@ -1,6 +1,9 @@
-import type { HumanReadable, QueryResultDetails as ZeroQueryResultDetails } from "@rocicorp/zero";
-import type { QueryResult as ZeroQueryResult } from "@rocicorp/zero/react";
-import * as Match from "effect/Match";
+import type {
+  ErroredQuery,
+  HumanReadable,
+  ResultType,
+  QueryResultDetails as ZeroQueryResultDetails,
+} from "@rocicorp/zero";
 
 // Our internal representation of Zero's QueryResult type.
 
@@ -20,11 +23,52 @@ export namespace QueryResult {
   }
 }
 
-export const make = <A>([value, details]: ZeroQueryResult<A>): QueryResult<A> => {
-  return Match.value(details).pipe(
-    Match.when({ type: "complete" }, () => ({ _tag: "Complete", value }) as const),
-    Match.when({ type: "unknown" }, () => ({ _tag: "Partial", value }) as const),
-    Match.when({ type: "error" }, ({ type: _type, ...details }) => ({ _tag: "Error", details }) as const),
-    Match.exhaustive,
-  );
+// Build the error `details` from a Zero error payload (mirrors zero-react's `makeError`, minus `type`).
+const errorDetails = (retry: () => void, error: ErroredQuery): QueryResult.Error["details"] => ({
+  retry,
+  refetch: retry,
+  error: {
+    type: error.error,
+    message: error.message ?? "An unknown error occurred",
+    ...(error.details ? { details: error.details } : {}),
+  },
+});
+
+// Build the internal `QueryResult` directly from a Zero view event, without the intermediate zero-react
+// snapshot tuple. Mirrors the composed behavior of the previous `getSnapshot` + tuple conversion.
+export const fromView = <A>(
+  singular: boolean,
+  value: HumanReadable<A>,
+  resultType: ResultType,
+  retry: () => void,
+  error?: ErroredQuery,
+): QueryResult<A> => {
+  switch (resultType) {
+    case "complete":
+      return { _tag: "Complete", value };
+    case "unknown":
+      return { _tag: "Partial", value };
+    default: {
+      if (error) return { _tag: "Error", details: errorDetails(retry, error) };
+      // No error payload: an empty result keeps empty details (as the predefined empty error snapshot
+      // did); a non-empty one falls back to a generic "app" error (as the non-empty error snapshot did).
+      const isEmpty = singular ? value === undefined : (value as ReadonlyArray<unknown>).length === 0;
+      if (isEmpty) return { _tag: "Error", details: {} as QueryResult.Error["details"] };
+      return {
+        _tag: "Error",
+        details: errorDetails(retry, {
+          error: "app",
+          id: "unknown",
+          name: "unknown",
+          message: "An unknown error occurred",
+        }),
+      };
+    }
+  }
 };
+
+// The initial (pending) result before any view event has arrived.
+export const initial = <A>(singular: boolean): QueryResult<A> => ({
+  _tag: "Partial",
+  value: (singular ? undefined : []) as unknown as HumanReadable<A>,
+});
