@@ -24,6 +24,7 @@ import {
   ExecuteTransactError,
   MutationShortCircuit,
   MutatorNotFoundError,
+  OutOfOrderMutationError,
   ServerArgsParseError,
   toApplicationError,
 } from "./internal/server.js";
@@ -87,10 +88,13 @@ export const handleMutate = Effect.fn(function* <
                       (effect) => Effect.runPromise(effect, { signal }),
                     ),
                   ),
-                // Out-of-order is thrown by upstream's `transact` before our mutator runs; pass the raw
-                // error through unconverted so the top-level handler can re-raise it (see below).
+                // Out-of-order is thrown by upstream's `transact` before our mutator runs; wrap it in a
+                // tagged error so it stays in the Effect channel, and re-raise the raw error only at the
+                // top level (see below), where upstream recognizes it.
                 catch: (error) =>
-                  error instanceof OutOfOrderMutation ? error : new ExecuteTransactError({ cause: Cause.fail(error) }),
+                  error instanceof OutOfOrderMutation
+                    ? new OutOfOrderMutationError({ cause: Cause.fail(error) })
+                    : new ExecuteTransactError({ cause: Cause.fail(error) }),
               }).pipe(Effect.flatMap((value) => Deferred.succeed(response, value)));
 
               return yield* Deferred.poll(exitDeferred).pipe(
@@ -119,12 +123,14 @@ export const handleMutate = Effect.fn(function* <
               Effect.flatten,
             );
           }).pipe(
-            // Re-raise out-of-order errors unconverted: upstream `handleMutateRequest` recognizes the
-            // raw `OutOfOrderMutation` (by identity) and turns it into a top-level `PushFailed`. Every
-            // other failure becomes a per-mutation `ApplicationError` (with info-hiding `details`).
+            // Unwrap and re-raise out-of-order errors as the raw `OutOfOrderMutation`: upstream
+            // `handleMutateRequest` recognizes it (by identity) and turns it into a top-level `PushFailed`.
+            // Every other failure becomes a per-mutation `ApplicationError` (info-hiding `message`).
             Effect.catchCause((cause) => {
               const error = Cause.squash(cause);
-              return error instanceof OutOfOrderMutation ? Effect.fail(error) : Effect.fail(toApplicationError(cause));
+              return OutOfOrderMutationError.is(error)
+                ? Effect.failCause(error.cause)
+                : Effect.fail(toApplicationError(cause));
             }),
             Effect.provide(ctx),
             Effect.runPromise,
