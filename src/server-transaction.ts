@@ -1,5 +1,5 @@
 import type { Schema as ZeroSchema, ServerTransaction as ZeroServerTransaction } from "@rocicorp/zero";
-import type { ZQLDatabase } from "@rocicorp/zero/server";
+import type { OutOfOrderMutation, ZQLDatabase } from "@rocicorp/zero/server";
 import * as Cause from "effect/Cause";
 import * as Ctx from "effect/Context";
 import * as Data from "effect/Data";
@@ -8,7 +8,7 @@ import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Layer from "effect/Layer";
 import type * as Unify from "effect/Unify";
 import * as ClientTransaction from "./client-transaction.js";
-import type { ExecuteTransactError, MutationShortCircuit, OutOfOrderMutationError } from "./internal/server.js";
+import type { ExecuteTransactError, MutationShortCircuit } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { prefixId } from "./internal/utils.js";
 
@@ -37,7 +37,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     {
       readonly transact: <A, E, R>(
         fn: (transaction: ZeroServerTransaction<TSchema, TTransaction>) => Effect.Effect<A, E, R>,
-      ) => Effect.Effect<A, E | OutOfOrderMutationError | ExecuteTransactError | MutationShortCircuit, R>;
+      ) => Effect.Effect<A, E | OutOfOrderMutation | ExecuteTransactError | MutationShortCircuit, R>;
     }
   >()(`${id as string}/ServerTransactionCallback` as const) {}
 

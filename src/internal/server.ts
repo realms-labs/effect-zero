@@ -1,9 +1,8 @@
-import { ApplicationError, type OutOfOrderMutation } from "@rocicorp/zero/server";
+import { ApplicationError } from "@rocicorp/zero/server";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
-import { prefixId } from "./utils.js";
 
 export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
   message = "No transaction detected in a mutation, a transaction is required.";
@@ -31,18 +30,6 @@ export class ExecuteTransactError extends Data.TaggedError("ExecuteTransactError
   override get message(): string {
     const error = Cause.squash(this.cause);
     return Predicate.isError(error) && error.message ? error.message : "Internal error";
-  }
-}
-
-const OutOfOrderMutationErrorTypeId = Symbol.for(prefixId("OutOfOrderMutationError"));
-// Our tagged wrapper for upstream's untagged `OutOfOrderMutation`. Holds the raw error so it can be
-// re-raised unconverted at the top level, and is discriminated via its TypeId (not `instanceof`).
-export class OutOfOrderMutationError extends Data.TaggedError("OutOfOrderMutationError")<{
-  readonly cause: Cause.Cause<OutOfOrderMutation>;
-}> {
-  readonly [OutOfOrderMutationErrorTypeId] = OutOfOrderMutationErrorTypeId;
-  static is(e: unknown): e is OutOfOrderMutationError {
-    return Predicate.hasProperty(e, OutOfOrderMutationErrorTypeId);
   }
 }
 
