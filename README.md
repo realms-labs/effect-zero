@@ -39,7 +39,7 @@ export const mutatorSchema = Mutators.schema({
 // server.ts
 
 import { zeroPostgresJS } from "@rocicorp/zero/server/adapters/postgresjs";
-import { PushResponse, PushParams, PushBody } from "effect-zero/types/push";
+import { PushParams, PushBody } from "effect-zero/types/push";
 import * as ServerTransaction from "effect-zero/server-transaction";
 import * as Mutators from "effect-zero/mutators";
 import * as Server from "effect-zero/server";
@@ -107,8 +107,7 @@ export async function handleZeroPush(req: Request): Promise<Response> {
   });
   const payload = Schema.decodeSync(PushBody)(await req.json());
 
-  const result = await Effect.runPromise(Server.processPush(serverTransaction, serverMutators, urlParams, payload));
-  const responseBody = Schema.encodeSync(PushResponse)(result);
+  const responseBody = await Effect.runPromise(Server.handleMutate(serverTransaction, serverMutators, urlParams, payload));
   return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
 }
 ```

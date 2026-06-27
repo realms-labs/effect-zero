@@ -10,6 +10,7 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
+import { ContextSymbol, SchemaSymbol } from "./client-transaction.js";
 import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 
@@ -23,7 +24,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 ) {
   const ctx =
     yield* Effect.context<
-      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction.Context)["Identifier"]>
+      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction)[typeof ContextSymbol]["Identifier"]>
     >();
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
@@ -31,7 +32,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
       const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
-        Effect.provideService(transaction.Context, tx),
+        Effect.provideService(transaction[ContextSymbol], tx),
         Effect.runPromiseExitWith(ctx),
       );
       if (Exit.isFailure(exit)) {
@@ -50,7 +51,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
     Effect.sync(() => {
       return new Zero({
         ...options,
-        schema: transaction.schema,
+        schema: transaction[SchemaSymbol],
         mutators: unwrappedMutators,
       });
     }),
