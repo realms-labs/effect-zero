@@ -28,7 +28,7 @@ import {
   toApplicationError,
 } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
-import { normalizeArgs, prefixId } from "./internal/utils.js";
+import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
@@ -185,7 +185,10 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
             Effect.runSyncExitWith(ctx),
             (exit) => {
               if (Exit.isFailure(exit)) {
-                throw new QueryUserError<E>({ cause: exit.cause });
+                // Rethrow the underlying error so upstream's `getErrorMessage`/`getErrorDetails` produce a
+                // clean per-query `{ error: "app", message, details? }` response — rather than wrapping the
+                // Effect `Cause` (which upstream would serialize into a `"Parsed message: {…}"` blob).
+                throw Cause.squash(exit.cause);
               }
               return exit.value;
             },
@@ -193,27 +196,15 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
         schema,
         payload as ReadonlyJSONValue,
       ),
-    catch: (e) =>
-      Option.liftPredicate(e, QueryUserError.is<E>).pipe(
-        Option.flatMap((e) => Cause.findErrorOption(e.cause)),
-        Option.getOrElse(() => new QueryRequestError({ cause: Cause.fail(e) })),
-      ),
+    // `handleQueryRequest` resolves per-query failures to a `transformFailed`/per-query error and does not
+    // reject under normal operation, so this only catches a genuine infra/defect — mirrors handleMutate.
+    catch: (e) => new QueryRequestError({ cause: Cause.fail(e) }),
   });
 });
 
 class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> {
   override get message() {
     return `Query not found: ${this.name}`;
-  }
-}
-
-const QueryUserErrorTypeId = Symbol.for(prefixId("QueryUserError"));
-class QueryUserError<E> extends Data.TaggedError("QueryUserError")<{
-  cause: Cause.Cause<E | Schema.SchemaError | QueryNotFound>;
-}> {
-  readonly [QueryUserErrorTypeId] = QueryUserErrorTypeId;
-  static is<E>(e: unknown): e is QueryUserError<E> {
-    return Predicate.hasProperty(e, QueryUserErrorTypeId);
   }
 }
 

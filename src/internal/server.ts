@@ -42,10 +42,11 @@ export class MutationShortCircuit extends Data.TaggedError("MutationShortCircuit
 // recognizes (via `isApplicationError`) and turns into a per-mutation `{ error: "app", ... }` response.
 // Each of our errors defines its own user-facing `message` — machinery errors report "Internal error",
 // and `cause`-wrapping errors (e.g. ServerTransactionError) delegate to the error they wrap — so the
-// squashed error's `message` is already the right text. (`details` is set explicitly because upstream
-// `makeAppErrorResponse` only emits `details` when truthy.)
+// squashed error's `message` is already the right text. We deliberately leave `details` unset so the
+// wire shape matches upstream's (`makeAppErrorResponse` emits `details` only when truthy): the human
+// text lives in `message`, and `details` is reserved for structured data, not a copy of the message.
 export const toApplicationError = (cause: Cause.Cause<unknown>): ApplicationError => {
   const error = Cause.squash(cause);
   const message = Predicate.isError(error) && error.message ? error.message : "Internal error";
-  return new ApplicationError(message, { details: message, cause: error });
+  return new ApplicationError(message, { cause: error });
 };

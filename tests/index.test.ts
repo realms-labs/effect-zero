@@ -515,15 +515,17 @@ it.live(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.tryPromise({
-      try: async () => {
-        const mut = z.mutate.messages.create({} as any);
-        await mut.client.catch(Effect.fail);
-        await mut.server.catch(Effect.fail);
-      },
-      catch: (e) => {
-        expect(e).toSatisfy(Predicate.isTagged("ClientArgsParseError"));
-      },
+    // Missing required fields: the server re-validates args via Effect-Schema, fails with
+    // ServerArgsParseError, and reports it as a masked app-error ("Internal error").
+    // (Previously this test caught nothing — `.catch(Effect.fail)` resolves both rejections, so the
+    // assertion in the `catch` never ran and the test passed vacuously.)
+    const result = yield* Effect.promise(() => z.mutate.messages.create({} as any).server);
+    expect(result).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
+        message: "Internal error",
+      }),
     });
   }),
 );
@@ -557,7 +559,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "error in throwsError",
+        message: "error in throwsError",
       }),
     });
   }),
@@ -568,16 +570,13 @@ it.live(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.tryPromise({
-      try: async () => {
-        const mut = z.mutate.throwsErrorInsideTransaction();
-        await mut.server.catch(Effect.fail);
-      },
-      catch: (e) =>
-        expect(e).toEqual({
-          error: "app",
-          details: "error in throwsErrorInsideTransaction",
-        }),
+    const result = yield* Effect.promise(() => z.mutate.throwsErrorInsideTransaction().server);
+    expect(result).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
+        message: "error in throwsErrorInsideTransaction",
+      }),
     });
   }),
 );
@@ -627,7 +626,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "error in yieldsError",
+        message: "error in yieldsError",
       }),
     });
   }),
@@ -643,7 +642,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "error in yieldsErrorInsideTransaction",
+        message: "error in yieldsErrorInsideTransaction",
       }),
     });
   }),
@@ -668,7 +667,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "No transaction detected in a mutation, a transaction is required.",
+        message: "No transaction detected in a mutation, a transaction is required.",
       }),
     });
   }),
@@ -729,7 +728,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "Internal error",
+        message: "Internal error",
       }),
     });
   }),
@@ -741,6 +740,62 @@ it.live(
     const z = yield* initZero;
 
     yield* Effect.promise(() => expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined());
+  }),
+);
+
+it.live(
+  "unsupported push version returns a top-level PushFailed",
+  Effect.fn(function* () {
+    // The push-version check runs before any DB/client logic, so dummy params + an empty batch suffice.
+    const params: PushParams = { schema: "public", appID: "zero" };
+    const body: PushBody = {
+      clientGroupID: nanoid(),
+      mutations: [],
+      pushVersion: 2,
+      timestamp: Date.now(),
+      requestID: nanoid(),
+    };
+
+    const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, body);
+    expect(result).toMatchObject({ kind: "PushFailed", origin: "server", reason: "unsupportedPushVersion" });
+  }),
+);
+
+it.live(
+  "already-processed mutations return an alreadyProcessed result",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    // Establish the client's last-mutation-id row with a first successful mutation.
+    yield* Effect.promise(() => z.mutate.messages.create({ id: nanoid(), body: "first" }).server);
+
+    // Artificially advance the stored last-mutation-id so the next mutation looks already-processed.
+    // NOTE: assumes the column is `zero_0.clients."lastMutationID"` — adjust to the live schema if needed.
+    yield* Effect.promise(() => rawDb`update zero_0.clients set "lastMutationID" = 9999`);
+
+    // Like the OOO case, the mutation is retried under the hood and never resolves, so inspect the last response.
+    z.mutate.messages.create({ id: nanoid(), body: "second" }).server.then();
+    yield* Effect.sleep(Duration.millis(100));
+
+    const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
+    expect(lastResponse).toMatchObject({ mutations: [{ result: { error: "alreadyProcessed" } }] });
+  }),
+);
+
+it.live(
+  "a database error surfaces as a per-mutation app error (not a top-level PushFailed)",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    // Seed a row directly so the server-side insert collides on the primary key. The client store has no
+    // such row, so the optimistic insert succeeds and the mutation is still pushed to the server.
+    const id = nanoid();
+    yield* Effect.promise(() => rawDb`insert into messages (id, body) values (${id}, 'seed')`);
+
+    // Our bridge converts the resulting DB error into a per-mutation app error; it never emits a top-level
+    // PushFailed reason:"database" (only OutOfOrderMutation is passed through to upstream's top-level handler).
+    const result = yield* Effect.promise(() => z.mutate.messages.create({ id, body: "dup" }).server);
+    expect(result).toMatchObject({ type: "error", error: { type: "app" } });
   }),
 );
 
