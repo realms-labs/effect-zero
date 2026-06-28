@@ -2,7 +2,6 @@ import { Zero, type ZeroOptions, type Schema as ZeroSchema, type Transaction as 
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
@@ -29,17 +28,14 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
-      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
+      // Under Effect v4, `runPromiseWith` rejects with the bare underlying error (not a `FiberFailure`),
+      // so the mutator's failure surfaces directly — no need to run to an `Exit` and squash it ourselves.
+      return await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction[ContextSymbol], tx),
-        Effect.runPromiseExitWith(ctx),
+        Effect.runPromiseWith(ctx),
       );
-      if (Exit.isFailure(exit)) {
-        // Extract underlying error bypassing FiberFailure
-        throw Cause.squash(exit.cause);
-      }
-      return exit.value;
     };
   }
 
