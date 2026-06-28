@@ -78,4 +78,10 @@ type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMu
 
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
   readonly cause: Cause.Cause<Schema.SchemaError>;
-}> {}
+}> {
+  // Surface the underlying schema error's message instead of a serialized `Cause` blob.
+  override get message() {
+    const error = Cause.squash(this.cause);
+    return error instanceof Error && error.message ? error.message : "Internal error";
+  }
+}

@@ -77,4 +77,10 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
 
 class ServerTransactionError extends Data.TaggedError("ServerTransactionError")<{
   readonly cause: Cause.Cause<unknown>;
-}> {}
+}> {
+  // Surface the wrapped error's message — the user threw it inside `use` — falling back to "Internal error".
+  override get message() {
+    const error = Cause.squash(this.cause);
+    return error instanceof Error && error.message ? error.message : "Internal error";
+  }
+}

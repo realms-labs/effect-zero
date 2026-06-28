@@ -511,22 +511,24 @@ it.live(
 );
 
 it.live(
-  "schema validation is applied to mutator arguments",
+  "server-side schema validation rejects invalid mutator arguments",
   Effect.fn(function* () {
-    const z = yield* initZero;
+    // The client validates args first (its own ClientArgsParseError), so drive `handleMutate` directly to
+    // exercise the *server's* re-validation. Missing required fields fail the Effect-Schema decode before
+    // any transaction runs (ServerArgsParseError), masked to an "Internal error" app-error.
+    const params: PushParams = { schema: "public", appID: "zero" };
+    const body: PushBody = {
+      clientGroupID: nanoid(),
+      mutations: [
+        { type: "custom", id: 1, clientID: nanoid(), name: "messages|create", args: [{}], timestamp: Date.now() },
+      ],
+      pushVersion: 1,
+      timestamp: Date.now(),
+      requestID: nanoid(),
+    };
 
-    // Missing required fields: the server re-validates args via Effect-Schema, fails with
-    // ServerArgsParseError, and reports it as a masked app-error ("Internal error").
-    // (Previously this test caught nothing — `.catch(Effect.fail)` resolves both rejections, so the
-    // assertion in the `catch` never ran and the test passed vacuously.)
-    const result = yield* Effect.promise(() => z.mutate.messages.create({} as any).server);
-    expect(result).toEqual({
-      type: "error",
-      error: expect.objectContaining({
-        type: "app",
-        message: "Internal error",
-      }),
-    });
+    const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, body);
+    expect(result).toMatchObject({ mutations: [{ result: { error: "app", message: "Internal error" } }] });
   }),
 );
 
