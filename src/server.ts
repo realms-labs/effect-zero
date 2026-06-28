@@ -87,9 +87,6 @@ export const handleMutate = Effect.fn(function* <
                       (effect) => Effect.runPromise(effect, { signal }),
                     ),
                   ),
-                // Any rejection from upstream's `transact` (out-of-order, DB-infra, …) is wrapped in one
-                // generic tagged error so it stays in the Effect channel. The OOO-vs-app decision happens
-                // once, at the top-level handler below (which unwraps this and re-raises a raw OOO).
                 catch: (error) => new TransactInternalError({ cause: Cause.fail(error) }),
               }).pipe(Effect.flatMap((value) => Deferred.succeed(response, value)));
 
@@ -186,16 +183,10 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
             Effect.fromOption,
             Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
-            Effect.runSyncExitWith(ctx),
-            (exit) => {
-              if (Exit.isFailure(exit)) {
-                // Rethrow the underlying error so upstream's `getErrorMessage`/`getErrorDetails` produce a
-                // clean per-query `{ error: "app", message, details? }` response — rather than wrapping the
-                // Effect `Cause` (which upstream would serialize into a `"Parsed message: {…}"` blob).
-                throw Cause.squash(exit.cause);
-              }
-              return exit.value;
-            },
+            // Returns the transformed query on success; on failure throws the underlying error. Under
+            // Effect v4 `runSync` throws the bare error (not a `FiberFailure`), so upstream's
+            // `getErrorMessage`/`getErrorDetails` produce a clean per-query `{ error: "app", message }`.
+            Effect.runSyncWith(ctx),
           ),
         schema,
         payload as ReadonlyJSONValue,
