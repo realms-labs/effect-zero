@@ -116,16 +116,12 @@ export const handleMutate = Effect.fn(function* <
               Effect.flatten,
             );
           }).pipe(
-            // The single OOO-vs-app split: unwrap the generic `transact` wrapper, and if the underlying
-            // rejection is out-of-order, re-raise it raw so upstream `handleMutateRequest` recognizes it
-            // (by identity) and produces a top-level `PushFailed`. Everything else becomes a per-mutation
-            // `ApplicationError` (info-hiding `message`).
             Effect.catchCause((cause) => {
-              const error = Cause.squash(cause);
-              const underlying = TransactInternalError.is(error) ? Cause.squash(error.cause) : error;
-              return underlying instanceof OutOfOrderMutation
-                ? Effect.fail(underlying)
-                : Effect.fail(makeApplicationError(cause));
+              const error = cause.pipe(Cause.squash, (squashed) =>
+                TransactInternalError.is(squashed) ? Cause.squash(squashed.cause) : squashed,
+              );
+              // Split out-of-order mutations from application errors, as `handleMutateRequest` expects.
+              return Effect.fail(error instanceof OutOfOrderMutation ? error : makeApplicationError(Cause.fail(error)));
             }),
             Effect.provide(ctx),
             Effect.runPromise,
@@ -183,16 +179,11 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
             Effect.fromOption,
             Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
-            // Returns the transformed query on success; on failure throws the underlying error. Under
-            // Effect v4 `runSync` throws the bare error (not a `FiberFailure`), so upstream's
-            // `getErrorMessage`/`getErrorDetails` produce a clean per-query `{ error: "app", message }`.
             Effect.runSyncWith(ctx),
           ),
         schema,
         payload as ReadonlyJSONValue,
       ),
-    // `handleQueryRequest` resolves per-query failures to a `transformFailed`/per-query error and does not
-    // reject under normal operation, so this only catches a genuine infra/defect — mirrors handleMutate.
     catch: (e) => new QueryRequestError({ cause: Cause.fail(e) }),
   });
 });

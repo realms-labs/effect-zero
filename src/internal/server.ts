@@ -10,36 +10,30 @@ export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
 }
 export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {}
 
+// No `message`: this internal lookup failure has none, so `makeApplicationError` falls back to
+// "Internal error" — the mutator name (kept here only for logging) never leaks into the response.
 export class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
   readonly name: string;
-}> {
-  // Reported generically so this internal lookup failure doesn't leak into the app-error response.
-  message = "Internal error";
-}
+}> {}
 
+// No `message`: a schema-validation failure must not leak field/structure detail, so
+// `makeApplicationError` falls back to "Internal error".
 export class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
   readonly cause: Cause.Cause<Schema.SchemaError>;
-}> {
-  message = "Internal error";
-}
+}> {}
 
 const TransactInternalErrorTypeId = Symbol.for(prefixId("TransactInternalError"));
-// Wraps any rejection from upstream's `transact` (out-of-order, DB-infra, …) so it stays in the Effect
-// error channel as a single tagged error rather than a raw JS error. The top-level handler unwraps it:
-// out-of-order is re-raised raw (for upstream's top-level routing), everything else becomes an
-// application error. Its `message` getter squashes the cause so the app-error message is clean (not a
-// serialized `Cause`), and reports "Internal error" for non-`Error` causes. Discriminated via its TypeId
-// (not `instanceof`) so detection survives duplicate copies of this module.
+// Purely internal wrapper: holds any rejection from upstream's `transact` (out-of-order, DB-infra, …) so
+// it stays in the Effect error channel as a single tagged error rather than a raw JS error. It carries no
+// `message` of its own — the top-level handler unwraps it (`TransactInternalError.is`) and either re-raises
+// the raw out-of-order error or turns the underlying error into an application error. Discriminated via its
+// TypeId (not `instanceof`) so detection survives duplicate copies of this module.
 export class TransactInternalError extends Data.TaggedError("TransactInternalError")<{
   readonly cause: Cause.Cause<unknown>;
 }> {
   readonly [TransactInternalErrorTypeId] = TransactInternalErrorTypeId;
   static is(e: unknown): e is TransactInternalError {
     return Predicate.hasProperty(e, TransactInternalErrorTypeId);
-  }
-  override get message() {
-    const error = Cause.squash(this.cause);
-    return Predicate.isError(error) && error.message ? error.message : "Internal error";
   }
 }
 
@@ -50,11 +44,10 @@ export class TransactCallbackNotInvokedError extends Data.TaggedError("TransactC
 
 // Convert an Effect failure cause into an upstream `ApplicationError`, which `handleMutateRequest`
 // recognizes (via `isApplicationError`) and turns into a per-mutation `{ error: "app", ... }` response.
-// Each of our errors defines its own user-facing `message` — machinery errors report "Internal error",
-// and `cause`-wrapping errors (e.g. ServerTransactionError) delegate to the error they wrap — so the
-// squashed error's `message` is already the right text. We deliberately leave `details` unset so the
-// wire shape matches upstream's (`makeAppErrorResponse` emits `details` only when truthy): the human
-// text lives in `message`, and `details` is reserved for structured data, not a copy of the message.
+// Uses the squashed error's `message`, falling back to "Internal error" for errors without a usable one
+// (our internal machinery errors deliberately carry no message, so they fall back rather than leak). We
+// leave `details` unset so the wire shape matches upstream's (`makeAppErrorResponse` emits `details` only
+// when truthy): the human text lives in `message`, and `details` is reserved for structured data.
 export const makeApplicationError = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
   const message = Predicate.isError(error) && error.message ? error.message : "Internal error";
