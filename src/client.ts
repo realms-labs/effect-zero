@@ -1,4 +1,5 @@
 import { Zero, type ZeroOptions, type Schema as ZeroSchema, type Transaction as ZeroTransaction } from "@rocicorp/zero";
+import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
@@ -28,7 +29,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) =>
       Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
-        Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ message: e.message, cause: e }))),
+        Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction[ContextSymbol], tx),
         Effect.runPromiseWith(ctx),
@@ -68,10 +69,16 @@ type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMu
       };
 } & {};
 
-// Idiomatic v4: pass the underlying error's text as the native `message` and the raw error as the native
-// `cause`. `Data.TaggedError` forwards both to the JS `Error`, so `.message` is clean (no serialized
-// `Cause` blob) and `.cause` chains — no hand-rolled getter, no `Cause` wrapping.
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
-  readonly message: string;
-  readonly cause: Schema.SchemaError;
-}> {}
+  readonly cause: Cause.Cause<Schema.SchemaError>;
+}> {
+  // Surface the underlying schema error's message (not a serialized `Cause` blob). NOTE: a `SchemaError`
+  // is NOT `instanceof Error`, so we check for a string `message` property directly — a naive
+  // `instanceof Error` check would silently mask it to "Internal error" (regression-guarded in client.test.ts).
+  override get message() {
+    const error = Cause.squash(this.cause);
+    return Predicate.hasProperty(error, "message") && Predicate.isString(error.message) && error.message
+      ? error.message
+      : "Internal error";
+  }
+}
