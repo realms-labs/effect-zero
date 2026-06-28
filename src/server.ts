@@ -24,8 +24,8 @@ import {
   ExecuteTransactError,
   MutationShortCircuit,
   MutatorNotFoundError,
+  makeApplicationError,
   ServerArgsParseError,
-  toApplicationError,
 } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { normalizeArgs } from "./internal/utils.js";
@@ -81,7 +81,7 @@ export const handleMutate = Effect.fn(function* <
                   transact_((transaction) =>
                     fn(transaction).pipe(
                       Effect.onExit((exit) => Deferred.done(exitDeferred, exit)),
-                      Effect.catchCause((cause) => Effect.die(toApplicationError(cause))),
+                      Effect.catchCause((cause) => Effect.die(makeApplicationError(cause))),
                       Effect.asVoid,
                       Effect.provide(innerCtx),
                       (effect) => Effect.runPromise(effect, { signal }),
@@ -128,7 +128,7 @@ export const handleMutate = Effect.fn(function* <
               const underlying = error instanceof ExecuteTransactError ? Cause.squash(error.cause) : error;
               return underlying instanceof OutOfOrderMutation
                 ? Effect.fail(underlying)
-                : Effect.fail(toApplicationError(cause));
+                : Effect.fail(makeApplicationError(cause));
             }),
             Effect.provide(ctx),
             Effect.runPromise,
