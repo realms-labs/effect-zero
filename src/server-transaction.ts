@@ -1,5 +1,6 @@
 import type { Schema as ZeroSchema, ServerTransaction as ZeroServerTransaction } from "@rocicorp/zero";
 import type { ZQLDatabase } from "@rocicorp/zero/server";
+import * as Cause from "effect/Cause";
 import * as Ctx from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -49,11 +50,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
     const transaction = yield* Context;
     return yield* Effect.tryPromise({
       try: (signal) => fn(transaction, { signal }),
-      catch: (error) =>
-        new ServerTransactionError({
-          message: error instanceof Error && error.message ? error.message : "Internal error",
-          cause: error,
-        }),
+      catch: (error) => new TransactionUseError({ cause: Cause.fail(error) }),
     });
   });
 
@@ -78,7 +75,6 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
   };
 };
 
-class ServerTransactionError extends Data.TaggedError("ServerTransactionError")<{
-  readonly message: string;
-  readonly cause: unknown;
+class TransactionUseError extends Data.TaggedError("TransactionUseError")<{
+  cause: Cause.Cause<unknown>;
 }> {}

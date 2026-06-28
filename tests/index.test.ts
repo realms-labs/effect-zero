@@ -307,7 +307,7 @@ beforeAll(async () => {
       // `handleMutate` returns the upstream push response already in wire format, so no encoding step.
       const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, payload);
 
-      responses = Chunk.append(responses, result as unknown as PushResponse);
+      responses = Chunk.append(responses, result);
 
       return (yield* HttpServerResponse.json(result)).pipe(
         HttpServerResponse.setStatus(200),

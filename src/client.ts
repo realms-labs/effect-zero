@@ -70,15 +70,10 @@ type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMu
 } & {};
 
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
-  readonly cause: Cause.Cause<Schema.SchemaError>;
+  readonly cause: Cause.Cause<unknown>;
 }> {
-  // Surface the underlying schema error's message (not a serialized `Cause` blob). NOTE: a `SchemaError`
-  // is NOT `instanceof Error`, so we check for a string `message` property directly — a naive
-  // `instanceof Error` check would silently mask it to "Internal error" (regression-guarded in client.test.ts).
   override get message() {
     const error = Cause.squash(this.cause);
-    return Predicate.hasProperty(error, "message") && Predicate.isString(error.message) && error.message
-      ? error.message
-      : "Internal error";
+    return Predicate.isError(error) ? error.message : "Internal error";
   }
 }

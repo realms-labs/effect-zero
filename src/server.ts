@@ -3,7 +3,7 @@ import type {
   Schema as ZeroSchema,
   ServerTransaction as ZeroServerTransaction,
 } from "@rocicorp/zero";
-import { handleMutateRequest, handleQueryRequest, OutOfOrderMutation } from "@rocicorp/zero/server";
+import { ApplicationError, handleMutateRequest, handleQueryRequest, OutOfOrderMutation } from "@rocicorp/zero/server";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
@@ -20,13 +20,7 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
-import {
-  MutatorNotFoundError,
-  makeApplicationError,
-  ServerArgsParseError,
-  TransactCallbackNotInvokedError,
-  TransactInternalError,
-} from "./internal/server.js";
+import { TransactCallbackNotInvokedError, TransactInternalError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
@@ -129,8 +123,6 @@ export const handleMutate = Effect.fn(function* <
         params,
         request as ReadonlyJSONValue,
       ),
-    // Mirrors handleQuery's QueryRequestError: only genuine infra/defect rejections reach here.
-    // (Out-of-order resolves to a top-level PushFailed value, so it does not land in this catch.)
     catch: (e) => new HandleMutateError({ cause: Cause.fail(e) }),
   });
 });
@@ -158,10 +150,28 @@ const runMutation = Effect.fn(function* <R>(
 
   const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(
     normalizeArgs(mutation.args[0]),
-  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: e }))));
+  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))));
 
   return yield* mutator(args);
 });
+
+export const makeApplicationError = (cause: Cause.Cause<unknown>) => {
+  const error = Cause.squash(cause);
+  const message = Predicate.isError(error) && error.message ? error.message : "Internal error";
+  return new ApplicationError(message, { cause: error });
+};
+
+class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
+  readonly name: string;
+}> {
+  override get message() {
+    return `Mutator not found: ${this.name}`;
+  }
+}
+
+class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
+  readonly cause: Cause.Cause<unknown>;
+}> {}
 
 class HandleMutateError extends Data.TaggedError("HandleMutateError")<{ readonly cause: Cause.Cause<unknown> }> {}
 
@@ -184,7 +194,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
         schema,
         payload as ReadonlyJSONValue,
       ),
-    catch: (e) => new QueryRequestError({ cause: Cause.fail(e) }),
+    catch: (e) => new HandleQueryError({ cause: Cause.fail(e) }),
   });
 });
 
@@ -194,4 +204,4 @@ class QueryNotFound extends Data.TaggedError("QueryNotFound")<{ name: string }> 
   }
 }
 
-class QueryRequestError extends Data.TaggedError("QueryRequestError")<{ cause: Cause.Cause<unknown> }> {}
+class HandleQueryError extends Data.TaggedError("HandleQueryError")<{ cause: Cause.Cause<unknown> }> {}
