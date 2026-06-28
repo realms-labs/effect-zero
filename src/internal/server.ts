@@ -1,9 +1,8 @@
-import { ApplicationError, type OutOfOrderMutation } from "@rocicorp/zero/server";
+import { ApplicationError } from "@rocicorp/zero/server";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
-import { prefixId } from "./utils.js";
 
 export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
   message = "No transaction detected in a mutation, a transaction is required.";
@@ -23,29 +22,17 @@ export class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError
   message = "Internal error";
 }
 
-// Raised when the upstream `transact` promise rejects for a reason other than out-of-order (e.g. a DB
-// connection error) — i.e. a genuine infrastructure failure rather than a mutator/application error.
+// Wraps any rejection from upstream's `transact` (out-of-order, DB-infra, …) so it stays in the Effect
+// error channel as a single tagged error rather than a raw JS error. The top-level handler unwraps it:
+// out-of-order is re-raised raw (for upstream's top-level routing), everything else becomes an
+// application error. Its `message` getter squashes the cause so the app-error message is clean (not a
+// serialized `Cause`), and reports "Internal error" for non-`Error` causes.
 export class ExecuteTransactError extends Data.TaggedError("ExecuteTransactError")<{
   readonly cause: Cause.Cause<unknown>;
 }> {
   override get message(): string {
     const error = Cause.squash(this.cause);
     return Predicate.isError(error) && error.message ? error.message : "Internal error";
-  }
-}
-
-const OutOfOrderMutationErrorTypeId = Symbol.for(prefixId("OutOfOrderMutationError"));
-// Tagged wrapper for upstream's untagged `OutOfOrderMutation`. The routing would work without it (under
-// Effect v4 the raw error survives the boundary), but keeping out-of-order failures inside the Effect
-// error channel as a tagged error — rather than threading the raw JS error — is the idiomatic form. It
-// holds the raw error so it can be re-raised unconverted at the top level, and is discriminated via its
-// TypeId (not `instanceof`).
-export class OutOfOrderMutationError extends Data.TaggedError("OutOfOrderMutationError")<{
-  readonly cause: Cause.Cause<OutOfOrderMutation>;
-}> {
-  readonly [OutOfOrderMutationErrorTypeId] = OutOfOrderMutationErrorTypeId;
-  static is(e: unknown): e is OutOfOrderMutationError {
-    return Predicate.hasProperty(e, OutOfOrderMutationErrorTypeId);
   }
 }
 

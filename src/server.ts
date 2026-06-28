@@ -24,7 +24,6 @@ import {
   ExecuteTransactError,
   MutationShortCircuit,
   MutatorNotFoundError,
-  OutOfOrderMutationError,
   ServerArgsParseError,
   toApplicationError,
 } from "./internal/server.js";
@@ -88,13 +87,10 @@ export const handleMutate = Effect.fn(function* <
                       (effect) => Effect.runPromise(effect, { signal }),
                     ),
                   ),
-                // Out-of-order is thrown by upstream's `transact` before our mutator runs; wrap it in a
-                // tagged error so it stays in the Effect channel, and re-raise the raw error only at the
-                // top level (see below), where upstream recognizes it.
-                catch: (error) =>
-                  error instanceof OutOfOrderMutation
-                    ? new OutOfOrderMutationError({ cause: Cause.fail(error) })
-                    : new ExecuteTransactError({ cause: Cause.fail(error) }),
+                // Any rejection from upstream's `transact` (out-of-order, DB-infra, …) is wrapped in one
+                // generic tagged error so it stays in the Effect channel. The OOO-vs-app decision happens
+                // once, at the top-level handler below (which unwraps this and re-raises a raw OOO).
+                catch: (error) => new ExecuteTransactError({ cause: Cause.fail(error) }),
               }).pipe(Effect.flatMap((value) => Deferred.succeed(response, value)));
 
               return yield* Deferred.poll(exitDeferred).pipe(
@@ -123,13 +119,15 @@ export const handleMutate = Effect.fn(function* <
               Effect.flatten,
             );
           }).pipe(
-            // Unwrap and re-raise out-of-order errors as the raw `OutOfOrderMutation`: upstream
-            // `handleMutateRequest` recognizes it (by identity) and turns it into a top-level `PushFailed`.
-            // Every other failure becomes a per-mutation `ApplicationError` (info-hiding `message`).
+            // The single OOO-vs-app split: unwrap the generic `transact` wrapper, and if the underlying
+            // rejection is out-of-order, re-raise it raw so upstream `handleMutateRequest` recognizes it
+            // (by identity) and produces a top-level `PushFailed`. Everything else becomes a per-mutation
+            // `ApplicationError` (info-hiding `message`).
             Effect.catchCause((cause) => {
               const error = Cause.squash(cause);
-              return OutOfOrderMutationError.is(error)
-                ? Effect.failCause(error.cause)
+              const underlying = error instanceof ExecuteTransactError ? Cause.squash(error.cause) : error;
+              return underlying instanceof OutOfOrderMutation
+                ? Effect.fail(underlying)
                 : Effect.fail(toApplicationError(cause));
             }),
             Effect.provide(ctx),
