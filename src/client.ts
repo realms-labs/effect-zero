@@ -27,16 +27,13 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
     >();
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
-    return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
-      // Under Effect v4, `runPromiseWith` rejects with the bare underlying error (not a `FiberFailure`),
-      // so the mutator's failure surfaces directly — no need to run to an `Exit` and squash it ourselves.
-      return await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
+    return (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) =>
+      Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction[ContextSymbol], tx),
         Effect.runPromiseWith(ctx),
       );
-    };
   }
 
   const unwrappedMutators = Rec.map(mutators, (v) =>
