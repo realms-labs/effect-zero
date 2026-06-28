@@ -21,11 +21,11 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
 import {
-  ExecuteTransactError,
-  MutationShortCircuit,
   MutatorNotFoundError,
   makeApplicationError,
   ServerArgsParseError,
+  TransactCallbackNotInvokedError,
+  TransactInternalError,
 } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import { normalizeArgs } from "./internal/utils.js";
@@ -90,12 +90,12 @@ export const handleMutate = Effect.fn(function* <
                 // Any rejection from upstream's `transact` (out-of-order, DB-infra, …) is wrapped in one
                 // generic tagged error so it stays in the Effect channel. The OOO-vs-app decision happens
                 // once, at the top-level handler below (which unwraps this and re-raises a raw OOO).
-                catch: (error) => new ExecuteTransactError({ cause: Cause.fail(error) }),
+                catch: (error) => new TransactInternalError({ cause: Cause.fail(error) }),
               }).pipe(Effect.flatMap((value) => Deferred.succeed(response, value)));
 
               return yield* Deferred.poll(exitDeferred).pipe(
                 Effect.flatMap(Effect.fromOption),
-                Effect.catchTag("NoSuchElementError", () => Effect.fail(new MutationShortCircuit())),
+                Effect.catchTag("NoSuchElementError", () => Effect.fail(new TransactCallbackNotInvokedError())),
                 Effect.flatten,
               );
             });
@@ -125,7 +125,7 @@ export const handleMutate = Effect.fn(function* <
             // `ApplicationError` (info-hiding `message`).
             Effect.catchCause((cause) => {
               const error = Cause.squash(cause);
-              const underlying = error instanceof ExecuteTransactError ? Cause.squash(error.cause) : error;
+              const underlying = TransactInternalError.is(error) ? Cause.squash(error.cause) : error;
               return underlying instanceof OutOfOrderMutation
                 ? Effect.fail(underlying)
                 : Effect.fail(makeApplicationError(cause));
