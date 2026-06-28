@@ -158,7 +158,7 @@ const runMutation = Effect.fn(function* <R>(
 
   const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(
     normalizeArgs(mutation.args[0]),
-  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))));
+  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: e }))));
 
   return yield* mutator(args);
 });

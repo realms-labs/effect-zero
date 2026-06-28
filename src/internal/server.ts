@@ -16,10 +16,10 @@ export class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError
   readonly name: string;
 }> {}
 
-// No `message`: a schema-validation failure must not leak field/structure detail, so
-// `makeApplicationError` falls back to "Internal error".
+// No `message`: a schema-validation failure must not leak field/structure detail on the wire, so
+// `makeApplicationError` falls back to "Internal error" (the raw SchemaError stays in `cause` for logs).
 export class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
-  readonly cause: Cause.Cause<Schema.SchemaError>;
+  readonly cause: Schema.SchemaError;
 }> {}
 
 const TransactInternalErrorTypeId = Symbol.for(prefixId("TransactInternalError"));

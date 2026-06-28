@@ -1,10 +1,8 @@
 import type { Schema as ZeroSchema, Transaction as ZeroTransaction } from "@rocicorp/zero";
-import * as Cause from "effect/Cause";
 import * as Ctx from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
-import * as Predicate from "effect/Predicate";
 import type * as Unify from "effect/Unify";
 import { prefixId } from "./internal/utils.js";
 
@@ -27,7 +25,11 @@ export const make = <const Id extends string, TSchema extends ZeroSchema>(id: Id
       const transaction = yield* Context;
       return yield* Effect.tryPromise({
         try: (signal) => fn(transaction, { signal }),
-        catch: (error) => new ClientTransactionError({ cause: Cause.fail(error) }),
+        catch: (error) =>
+          new ClientTransactionError({
+            message: error instanceof Error ? error.message : "exception was not of type `Error`",
+            cause: error,
+          }),
       });
     });
 
@@ -35,10 +37,6 @@ export const make = <const Id extends string, TSchema extends ZeroSchema>(id: Id
 };
 
 class ClientTransactionError extends Data.TaggedError("ClientTransactionError")<{
-  readonly cause: Cause.Cause<unknown>;
-}> {
-  override get message() {
-    const err = Cause.squash(this.cause);
-    return Predicate.isError(err) ? err.message : "exception was not of type `Error`";
-  }
-}
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
