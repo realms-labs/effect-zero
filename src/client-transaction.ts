@@ -5,9 +5,13 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import type * as Unify from "effect/Unify";
+import { prefixId } from "./internal/utils.js";
 
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
+
+export const ContextSymbol = Symbol.for(prefixId("Context"));
+export const SchemaSymbol = Symbol.for(prefixId("Schema"));
 
 // biome-ignore lint/suspicious/noExplicitAny: any client transaction (its Id literal is irrelevant here)
 export type Context<TSchema extends ZeroSchema> = ReturnType<typeof make<any, TSchema>>;
@@ -26,7 +30,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema>(id: Id
       });
     });
 
-  return { Context, use, schema };
+  return { use, [ContextSymbol]: Context, [SchemaSymbol]: schema };
 };
 
 class ClientTransactionError extends Data.TaggedError("ClientTransactionError")<{

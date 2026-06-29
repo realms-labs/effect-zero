@@ -21,44 +21,42 @@ export const layer: Layer.Layer<ServerSynchronizationContext> = Layer.effect(Ser
 );
 
 // Ensures that only one transaction is executed at a time and checks that another transaction wasn't already executed.
-export const guard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    const ctx = yield* ServerSynchronizationContext;
-    return yield* SynchronizedRef.modifyEffect(
-      ctx.wasTransactionExecuted,
-      Effect.fn(function* (wasTransactionExecuted) {
-        if (wasTransactionExecuted) {
-          return yield* new MultipleTransactionsError();
+export const guard = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+  const ctx = yield* ServerSynchronizationContext;
+  return yield* SynchronizedRef.modifyEffect(
+    ctx.wasTransactionExecuted,
+    Effect.fn(function* (wasTransactionExecuted) {
+      if (wasTransactionExecuted) {
+        return yield* new MultipleTransactionsError();
+      }
+      const result = yield* effect;
+      return [result, true];
+    }),
+  );
+});
+
+export const finalize = Effect.fn(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+  const { wasTransactionExecuted } = yield* ServerSynchronizationContext;
+
+  return yield* effect.pipe(
+    // Case #2 "One transaction then fail"
+    // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
+    Effect.catchCause(
+      Effect.fn(function* (e) {
+        if (yield* SynchronizedRef.get(wasTransactionExecuted)) {
+          return yield* Effect.logError("Error occurred after transaction execution completed", e);
         }
-        const result = yield* effect;
-        return [result, true];
+        return yield* Effect.failCause(e);
       }),
-    );
-  });
-
-export const finalize = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.gen(function* () {
-    const { wasTransactionExecuted } = yield* ServerSynchronizationContext;
-
-    return yield* effect.pipe(
-      // Case #2 "One transaction then fail"
-      // If the transaction was executed successfully, swallow the error and just log it, otherwise re-throw it
-      Effect.catchCause(
-        Effect.fn(function* (e) {
-          if (yield* SynchronizedRef.get(wasTransactionExecuted)) {
-            return yield* Effect.logError("Error occurred after transaction execution completed", e);
-          }
-          return yield* Effect.failCause(e);
-        }),
-      ),
-      // Case #4 "Zero transactions then succeed"
-      // Check that the transaction was executed during the mutation
-      Effect.tap(
-        Effect.gen(function* () {
-          if (!(yield* SynchronizedRef.get(wasTransactionExecuted))) {
-            return yield* new NoTransactionError();
-          }
-        }),
-      ),
-    );
-  });
+    ),
+    // Case #4 "Zero transactions then succeed"
+    // Check that the transaction was executed during the mutation
+    Effect.tap(
+      Effect.gen(function* () {
+        if (!(yield* SynchronizedRef.get(wasTransactionExecuted))) {
+          return yield* new NoTransactionError();
+        }
+      }),
+    ),
+  );
+});

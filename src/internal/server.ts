@@ -1,44 +1,21 @@
-import type { TransactionProviderInput } from "@rocicorp/zero/server";
-import * as Context from "effect/Context";
+import type * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import { prefixId } from "./utils.js";
-
-export class ServerTransactionInput extends Context.Service<ServerTransactionInput, TransactionProviderInput>()(
-  prefixId("ServerTransactionInput"),
-) {}
 
 export class NoTransactionError extends Data.TaggedError("NoTransactionError") {
   message = "No transaction detected in a mutation, a transaction is required.";
 }
 export class MultipleTransactionsError extends Data.TaggedError("MultipleTransactionsError") {}
 
-const OutOfOrderMutationErrorTypeId = Symbol.for(prefixId("OutOfOrderMutationError"));
-export class OutOfOrderMutationError extends Data.TaggedError("OutOfOrderMutationError")<{
-  readonly clientID: string;
-  readonly receivedMutationID: number;
-  readonly lastMutationID: number | bigint;
+const TransactInternalErrorTypeId = Symbol.for(prefixId("TransactInternalError"));
+export class TransactInternalError extends Data.TaggedError("TransactInternalError")<{
+  readonly cause: Cause.Cause<unknown>;
 }> {
-  readonly [OutOfOrderMutationErrorTypeId] = OutOfOrderMutationErrorTypeId;
-  override get message() {
-    return `Client ${this.clientID} sent mutation ID ${this.receivedMutationID} but expected ${this.lastMutationID}`;
-  }
-  static is(e: unknown): e is OutOfOrderMutationError {
-    return Predicate.hasProperty(e, OutOfOrderMutationErrorTypeId);
+  readonly [TransactInternalErrorTypeId] = TransactInternalErrorTypeId;
+  static is(e: unknown): e is TransactInternalError {
+    return Predicate.hasProperty(e, TransactInternalErrorTypeId);
   }
 }
 
-const MutationAlreadyProcessedErrorTypeId = Symbol.for(prefixId("MutationAlreadyProcessedError"));
-export class MutationAlreadyProcessedError extends Data.TaggedError("MutationAlreadyProcessedError")<{
-  readonly clientID: string;
-  readonly received: number;
-  readonly actual: number | bigint;
-}> {
-  readonly [MutationAlreadyProcessedErrorTypeId] = MutationAlreadyProcessedErrorTypeId;
-  override get message() {
-    return `Ignoring mutation from ${this.clientID} with ID ${this.received} as it was already processed. Expected: ${this.actual}`;
-  }
-  static is(e: unknown): e is MutationAlreadyProcessedError {
-    return Predicate.hasProperty(e, MutationAlreadyProcessedErrorTypeId);
-  }
-}
+export class TransactCallbackNotInvokedError extends Data.TaggedError("TransactCallbackNotInvokedError") {}

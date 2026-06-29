@@ -33,7 +33,7 @@ import * as ZfxQuery from "effect-zero/query";
 import * as ZfxResult from "effect-zero/result";
 import * as ZfxServer from "effect-zero/server";
 import * as ZfxServerTransaction from "effect-zero/server-transaction";
-import { PushBody, PushParams, PushResponse } from "effect-zero/types/push";
+import { PushBody, PushParams, type PushResponse } from "effect-zero/types/push";
 import { TransformRequestMessage } from "effect-zero/types/queries";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
@@ -304,12 +304,12 @@ beforeAll(async () => {
     Effect.gen(function* () {
       const params = yield* HttpRouter.schemaParams(PushParams);
       const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
-      const result = yield* ZfxServer.processPush(serverTransaction, serverMutators, params, payload);
-      const responseBody = yield* Schema.encodeEffect(PushResponse)(result);
+      // `handleMutate` returns the upstream push response already in wire format, so no encoding step.
+      const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, payload);
 
-      responses = Chunk.append(responses, responseBody);
+      responses = Chunk.append(responses, result);
 
-      return (yield* HttpServerResponse.json(responseBody)).pipe(
+      return (yield* HttpServerResponse.json(result)).pipe(
         HttpServerResponse.setStatus(200),
         HttpServerResponse.setHeader("content-type", "application/json"),
       );
@@ -367,8 +367,8 @@ test("server is running", async () => {
   await expect(response.text()).resolves.toEqual("OK");
 });
 
-test("processPush has no extra requirements", () => {
-  const effect = ZfxServer.processPush(serverTransaction, serverMutators, {} as any, {} as any);
+test("handleMutate has no extra requirements", () => {
+  const effect = ZfxServer.handleMutate(serverTransaction, serverMutators, {} as any, {} as any);
 
   expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
 });
@@ -416,7 +416,7 @@ test("mutator requirements should propagate", () => {
       yield* DummyTag2;
     }),
   });
-  const serverEffect = ZfxServer.processPush(serverTransaction, mutators, {} as any, {} as any);
+  const serverEffect = ZfxServer.handleMutate(serverTransaction, mutators, {} as any, {} as any);
 
   expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
@@ -511,20 +511,16 @@ it.live(
 );
 
 it.live(
-  "schema validation is applied to mutator arguments",
+  "schema validation rejects invalid mutator arguments",
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.tryPromise({
-      try: async () => {
-        const mut = z.mutate.messages.create({} as any);
-        await mut.client.catch(Effect.fail);
-        await mut.server.catch(Effect.fail);
-      },
-      catch: (e) => {
-        expect(e).toSatisfy(Predicate.isTagged("ClientArgsParseError"));
-      },
-    });
+    // Missing required fields: the client validates args first and surfaces a `ClientArgsParseError` as an
+    // app-error. Its `message` getter ensures a real message rather than a serialized `Cause` blob.
+    // (The server re-validates too, but the client rejects first, so that path is unreached here.)
+    const result = yield* Effect.promise(() => z.mutate.messages.create({} as any).client);
+    expect(result).toMatchObject({ type: "error", error: { type: "app" } });
+    expect(JSON.stringify(result)).not.toContain("Parsed message");
   }),
 );
 
@@ -557,7 +553,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "error in throwsError",
+        message: "error in throwsError",
       }),
     });
   }),
@@ -568,16 +564,13 @@ it.live(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    yield* Effect.tryPromise({
-      try: async () => {
-        const mut = z.mutate.throwsErrorInsideTransaction();
-        await mut.server.catch(Effect.fail);
-      },
-      catch: (e) =>
-        expect(e).toEqual({
-          error: "app",
-          details: "error in throwsErrorInsideTransaction",
-        }),
+    const result = yield* Effect.promise(() => z.mutate.throwsErrorInsideTransaction().server);
+    expect(result).toEqual({
+      type: "error",
+      error: expect.objectContaining({
+        type: "app",
+        message: "error in throwsErrorInsideTransaction",
+      }),
     });
   }),
 );
@@ -627,7 +620,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "error in yieldsError",
+        message: "error in yieldsError",
       }),
     });
   }),
@@ -643,7 +636,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "error in yieldsErrorInsideTransaction",
+        message: "error in yieldsErrorInsideTransaction",
       }),
     });
   }),
@@ -668,7 +661,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "No transaction detected in a mutation, a transaction is required.",
+        message: "No transaction detected in a mutation, a transaction is required.",
       }),
     });
   }),
@@ -696,14 +689,16 @@ it.live(
     /*
     In case of "out of order" error, the mutation promise is not rejected, but retried under the hood.
     Since it won't ever be resolved or rejected in our case, we just run the mutation and check that
-    the last server response was "oooMutation" error.
+    the last server response was a top-level "PushFailed" error with reason "oooMutation".
+    (Upstream Zero reworked out-of-order handling into a top-level push error that stops the batch,
+    rather than a per-mutation `oooMutation` result.)
   */
     z.mutate.messages.create({ id: nanoid(), body: "hello world" }).server.then();
 
     yield* Effect.sleep(Duration.millis(100));
 
     const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
-    expect(lastResponse).toHaveProperty(["mutations", 0, "result", "error"], "oooMutation");
+    expect(lastResponse).toMatchObject({ kind: "PushFailed", origin: "server", reason: "oooMutation" });
   }),
 );
 
@@ -727,7 +722,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        details: "Internal error",
+        message: "Mutator not found: nonExistingMutator",
       }),
     });
   }),
@@ -739,6 +734,62 @@ it.live(
     const z = yield* initZero;
 
     yield* Effect.promise(() => expect(z.mutate.concurrentTransactions().server).resolves.toBeDefined());
+  }),
+);
+
+it.live(
+  "unsupported push version returns a top-level PushFailed",
+  Effect.fn(function* () {
+    // The push-version check runs before any DB/client logic, so dummy params + an empty batch suffice.
+    const params: PushParams = { schema: "public", appID: "zero" };
+    const body: PushBody = {
+      clientGroupID: nanoid(),
+      mutations: [],
+      pushVersion: 2,
+      timestamp: Date.now(),
+      requestID: nanoid(),
+    };
+
+    const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, body);
+    expect(result).toMatchObject({ kind: "PushFailed", origin: "server", reason: "unsupportedPushVersion" });
+  }),
+);
+
+it.live(
+  "already-processed mutations return an alreadyProcessed result",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    // Establish the client's last-mutation-id row with a first successful mutation.
+    yield* Effect.promise(() => z.mutate.messages.create({ id: nanoid(), body: "first" }).server);
+
+    // Artificially advance the stored last-mutation-id so the next mutation looks already-processed.
+    // NOTE: assumes the column is `zero_0.clients."lastMutationID"` — adjust to the live schema if needed.
+    yield* Effect.promise(() => rawDb`update zero_0.clients set "lastMutationID" = 9999`);
+
+    // Like the OOO case, the mutation is retried under the hood and never resolves, so inspect the last response.
+    z.mutate.messages.create({ id: nanoid(), body: "second" }).server.then();
+    yield* Effect.sleep(Duration.millis(100));
+
+    const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
+    expect(lastResponse).toMatchObject({ mutations: [{ result: { error: "alreadyProcessed" } }] });
+  }),
+);
+
+it.live(
+  "a database error surfaces as a per-mutation app error (not a top-level PushFailed)",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    // Seed a row directly so the server-side insert collides on the primary key. The client store has no
+    // such row, so the optimistic insert succeeds and the mutation is still pushed to the server.
+    const id = nanoid();
+    yield* Effect.promise(() => rawDb`insert into messages (id, body) values (${id}, 'seed')`);
+
+    // Our bridge converts the resulting DB error into a per-mutation app error; it never emits a top-level
+    // PushFailed reason:"database" (only OutOfOrderMutation is passed through to upstream's top-level handler).
+    const result = yield* Effect.promise(() => z.mutate.messages.create({ id, body: "dup" }).server);
+    expect(result).toMatchObject({ type: "error", error: { type: "app" } });
   }),
 );
 

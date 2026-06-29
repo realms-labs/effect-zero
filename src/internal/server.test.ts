@@ -1,5 +1,4 @@
 import { describe, it } from "@effect/vitest";
-import { assertExitFailure } from "@effect/vitest/utils";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -7,14 +6,18 @@ import { NoTransactionError } from "./server.js";
 import * as ServerSynchronizationContext from "./server-synchronization-context.js";
 
 describe("ServerSynchronizationContext", () => {
-  it.effect("finalize should return NoTransactionError when called without guard", () =>
-    Effect.gen(function* () {
+  it.effect(
+    "finalize should return NoTransactionError when called without guard",
+    Effect.fn(function* ({ expect }) {
       const result = yield* Effect.void.pipe(
         ServerSynchronizationContext.finalize,
         Effect.provide(ServerSynchronizationContext.layer),
         Effect.exit,
       );
-      assertExitFailure(result, Cause.fail(new NoTransactionError()));
+      expect(Exit.isFailure(result)).toBe(true);
+      if (Exit.isFailure(result)) {
+        expect(Cause.squash(result.cause)).toBeInstanceOf(NoTransactionError);
+      }
     }),
   );
 

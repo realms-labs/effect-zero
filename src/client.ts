@@ -2,7 +2,6 @@ import { Zero, type ZeroOptions, type Schema as ZeroSchema, type Transaction as 
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
@@ -10,6 +9,7 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
+import { ContextSymbol, SchemaSymbol } from "./client-transaction.js";
 import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 
@@ -23,23 +23,17 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 ) {
   const ctx =
     yield* Effect.context<
-      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction.Context)["Identifier"]>
+      Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction)[typeof ContextSymbol]["Identifier"]>
     >();
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
-    return async (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) => {
-      const exit = await Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
+    return (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) =>
+      Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
-        Effect.provideService(transaction.Context, tx),
-        Effect.runPromiseExitWith(ctx),
+        Effect.provideService(transaction[ContextSymbol], tx),
+        Effect.runPromiseWith(ctx),
       );
-      if (Exit.isFailure(exit)) {
-        // Extract underlying error bypassing FiberFailure
-        throw Cause.squash(exit.cause);
-      }
-      return exit.value;
-    };
   }
 
   const unwrappedMutators = Rec.map(mutators, (v) =>
@@ -50,7 +44,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
     Effect.sync(() => {
       return new Zero({
         ...options,
-        schema: transaction.schema,
+        schema: transaction[SchemaSymbol],
         mutators: unwrappedMutators,
       });
     }),
@@ -76,5 +70,10 @@ type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMu
 } & {};
 
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
-  readonly cause: Cause.Cause<Schema.SchemaError>;
-}> {}
+  readonly cause: Cause.Cause<unknown>;
+}> {
+  override get message() {
+    const error = Cause.squash(this.cause);
+    return Predicate.isError(error) ? error.message : "Internal error";
+  }
+}

@@ -39,7 +39,7 @@ export const mutatorSchema = Mutators.schema({
 // server.ts
 
 import { zeroPostgresJS } from "@rocicorp/zero/server/adapters/postgresjs";
-import { PushResponse, PushParams, PushBody } from "effect-zero/types/push";
+import { PushParams, PushBody } from "effect-zero/types/push";
 import * as ServerTransaction from "effect-zero/server-transaction";
 import * as Mutators from "effect-zero/mutators";
 import * as Server from "effect-zero/server";
@@ -107,8 +107,7 @@ export async function handleZeroPush(req: Request): Promise<Response> {
   });
   const payload = Schema.decodeSync(PushBody)(await req.json());
 
-  const result = await Effect.runPromise(Server.processPush(serverTransaction, serverMutators, urlParams, payload));
-  const responseBody = Schema.encodeSync(PushResponse)(result);
+  const responseBody = await Effect.runPromise(Server.handleMutate(serverTransaction, serverMutators, urlParams, payload));
   return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
 }
 ```
@@ -269,7 +268,7 @@ const todoAtom = Atom.fn(Effect.fn(function* (id: string, get: Atom.FnContext) {
 
 ## Differences from the original implementation
 
-One key difference is that `effect-zero` requires you to manually wrap your DB-related logic in a transaction inside a mutator code, whereas the original implementation automatically wraps the whole mutation in a transaction. This allows you to define some logic outside of transaction (either before or after), but it also creates some edge cases that are not possible in the original implementation, because now the transaction might succeed, but the code outside of it might fail. Below are the edge case rules that `effect-zero` follows during the mutation execution:
+In `effect-zero` the Zero transaction is an explicit step inside a mutator (via `serverTransaction.execute`/`.use`), so a mutator may run arbitrary Effect logic before and after it. (Upstream's `handleMutateRequest`/`transact` callback supports running code around the transaction too — this is not unique to `effect-zero` — but because an `effect-zero` mutator is a typed `Effect` with the transaction as a sub-step, it defines explicit rules for the edge cases this creates: the transaction may commit while surrounding code fails, or a mutator may run zero or multiple transactions.) Below are the rules `effect-zero` follows during mutation execution:
 
 1. "One transaction and succeed" -> successful response from the push endpoint (normal flow).
 2. "One transaction then fail" (code after the transaction produces an error) -> successful response, despite the mutation failing. This is essential to maintain integrity of Zero's internal state: the transaction has already succeeded (and altered the state of the database), thus the result from the push endpoint must coincide. Relatedly, the user must be careful with work performed after the transaction, it is considered "fire and forget".

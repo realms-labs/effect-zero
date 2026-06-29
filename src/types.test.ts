@@ -165,7 +165,7 @@ describe("Type tests", () => {
         },
       });
 
-      const serverEffect = Server.processPush(serverTransaction, mutators, {} as any, {} as any);
+      const serverEffect = Server.handleMutate(serverTransaction, mutators, {} as any, {} as any);
 
       // Server effect should require both NestedDummyTag and NestedDummyTag2
       expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<NestedDummyTag | NestedDummyTag2>();
@@ -193,13 +193,13 @@ describe("Type tests", () => {
         }),
       });
 
-      const serverEffect = Server.processPush(serverTransaction, mutators, {} as any, {} as any);
+      const serverEffect = Server.handleMutate(serverTransaction, mutators, {} as any, {} as any);
 
       // Server effect should require both DummyTag and DummyTag2
       expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
     });
 
-    it("processPush has no extra requirements when mutators have none", () => {
+    it("handleMutate has no extra requirements when mutators have none", () => {
       const clientTransaction = ClientTransaction.make("TestClientTransaction3", mockZeroSchema);
       const serverTransaction = ServerTransaction.make("TestServerTransaction2", mockDatabase, clientTransaction);
 
@@ -211,7 +211,7 @@ describe("Type tests", () => {
         simple: Effect.fn(function* () {}),
       });
 
-      const effect = Server.processPush(serverTransaction, mutators, {} as any, {} as any);
+      const effect = Server.handleMutate(serverTransaction, mutators, {} as any, {} as any);
 
       expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
     });
