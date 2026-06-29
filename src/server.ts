@@ -89,7 +89,7 @@ export const handleMutate = Effect.fn(function* <
                 Effect.catchTag("NoSuchElementError", () => Effect.fail(new TransactCallbackNotInvokedError())),
                 Effect.flatten,
               );
-            });
+            }, ServerSynchronizationContext.guard);
 
             const exit: Exit.Exit<unknown, unknown> = yield* runMutation<
               Mutators.ExtractMutatorsRequirements<TMutators>
