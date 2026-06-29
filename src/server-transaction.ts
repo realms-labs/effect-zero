@@ -6,6 +6,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import type * as Unify from "effect/Unify";
 import * as ClientTransaction from "./client-transaction.js";
 import type { TransactCallbackNotInvokedError, TransactInternalError } from "./internal/server.js";
@@ -76,5 +77,10 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
 };
 
 class TransactionUseError extends Data.TaggedError("TransactionUseError")<{
-  cause: Cause.Cause<unknown>;
-}> {}
+  readonly cause: Cause.Cause<unknown>;
+}> {
+  override get message() {
+    const error = Cause.squash(this.cause);
+    return Predicate.isError(error) ? error.message : "Internal error";
+  }
+}

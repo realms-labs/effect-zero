@@ -722,7 +722,7 @@ it.live(
       type: "error",
       error: expect.objectContaining({
         type: "app",
-        message: "Internal error",
+        message: "Mutator not found: nonExistingMutator",
       }),
     });
   }),
