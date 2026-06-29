@@ -237,8 +237,32 @@ const PushError = Schema.Union([UnsupportedPushVersion, UnsupportedSchemaVersion
 
 const PushResponseBody = Schema.Union([PushOk, PushError]);
 
-export const PushResponse = Schema.Union([PushResponseBody, PushFailedBody]);
-export type PushResponse = typeof PushResponse.Type;
+/**
+ * The success response shape introduced in Zero 1.5 (the push endpoint became `/mutate`).
+ * `handleMutateRequest` now always emits `{ kind: "MutateResponse", ... }`; the legacy `PushOk`
+ * (`{ mutations }`) shape is retained in {@link MutateResponse} below for backwards compatibility.
+ */
+export const MutateSuccess = Schema.Struct({
+  kind: Schema.Literal("MutateResponse"),
+  // The userID passed to `handleMutateRequest`, echoed back so zero-cache can enforce that only
+  // tabs belonging to the same user share a client group. `null` for logged-out clients.
+  userID: Schema.optional(Schema.NullOr(Schema.String)),
+  mutations: Schema.Array(MutationResponse),
+});
+export type MutateSuccess = typeof MutateSuccess.Type;
+
+/**
+ * The response returned by `handleMutateRequest`. Since Zero 1.5 this is a superset: the current
+ * `MutateSuccess` (`{ kind: "MutateResponse", ... }`) plus the legacy `PushOk`/`PushError` shapes
+ * and `PushFailedBody`.
+ */
+export const MutateResponse = Schema.Union([MutateSuccess, PushResponseBody, PushFailedBody]);
+export type MutateResponse = typeof MutateResponse.Type;
+
+/** @deprecated Renamed to {@link MutateResponse} when the push endpoint became `/mutate` in Zero 1.5. */
+export const PushResponse = MutateResponse;
+/** @deprecated Renamed to {@link MutateResponse} when the push endpoint became `/mutate` in Zero 1.5. */
+export type PushResponse = typeof MutateResponse.Type;
 
 // biome-ignore lint/correctness/noUnusedVariables: borrowed code
 const PushResponseMessage = Schema.Tuple([Schema.Literal("pushResponse"), PushResponseBody]);

@@ -46,6 +46,9 @@ export const handleMutate = Effect.fn(function* <
   mutators: TMutators,
   params: Types.PushParams,
   request: Types.PushBody,
+  // The authenticated user ID (or `null`/`undefined` for logged-out clients). Since Zero 1.5 this is
+  // echoed back so zero-cache can enforce that only tabs belonging to the same user share a client group.
+  userID: string | null | undefined,
 ) {
   const ctx =
     yield* Effect.context<
@@ -58,9 +61,9 @@ export const handleMutate = Effect.fn(function* <
 
   return yield* Effect.tryPromise({
     try: () =>
-      handleMutateRequest(
-        transaction[DatabaseSymbol],
-        (transact_, mutation) =>
+      handleMutateRequest({
+        dbProvider: transaction[DatabaseSymbol],
+        handler: (transact_, mutation) =>
           Effect.gen(function* () {
             const response = yield* Deferred.make<Awaited<ReturnType<typeof transact_>>>();
 
@@ -120,9 +123,10 @@ export const handleMutate = Effect.fn(function* <
             Effect.provide(ctx),
             Effect.runPromise,
           ),
-        params,
-        request as ReadonlyJSONValue,
-      ),
+        query: params,
+        body: request as ReadonlyJSONValue,
+        userID,
+      }),
     catch: (e) => new HandleMutateError({ cause: Cause.fail(e) }),
   });
 });
@@ -176,12 +180,14 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
   queries: MakeQueryResult<E, R1, R2>[],
   schema: ZeroSchema,
   payload: TransformRequestMessage,
+  // The authenticated user ID (or `null`/`undefined` for logged-out clients), echoed back to Zero.
+  userID: string | null | undefined,
 ) {
   const ctx = yield* Effect.context<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
-      handleQueryRequest(
-        (name, args) =>
+      handleQueryRequest({
+        handler: (name, args) =>
           Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
             Effect.fromOption,
             Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
@@ -189,8 +195,11 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
             Effect.runSyncWith(ctx),
           ),
         schema,
-        payload as ReadonlyJSONValue,
-      ),
+        // `query` params are unused by the query endpoint at runtime but required by the options type.
+        query: {},
+        body: payload as ReadonlyJSONValue,
+        userID,
+      }),
     catch: (e) => new HandleQueryError({ cause: Cause.fail(e) }),
   });
 });

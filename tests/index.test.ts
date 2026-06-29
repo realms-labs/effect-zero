@@ -305,7 +305,8 @@ beforeAll(async () => {
       const params = yield* HttpRouter.schemaParams(PushParams);
       const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
       // `handleMutate` returns the upstream push response already in wire format, so no encoding step.
-      const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, payload);
+      // No auth in this test harness, so the client is logged out (`userID: undefined`).
+      const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, payload, undefined);
 
       responses = Chunk.append(responses, result);
 
@@ -328,7 +329,7 @@ beforeAll(async () => {
     "/query",
     Effect.gen(function* () {
       const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-      const response = yield* ZfxServer.handleQuery(queries, schema, payload);
+      const response = yield* ZfxServer.handleQuery(queries, schema, payload, undefined);
       return yield* HttpServerResponse.json(response);
     }).pipe(
       Effect.catchCause(
@@ -368,7 +369,7 @@ test("server is running", async () => {
 });
 
 test("handleMutate has no extra requirements", () => {
-  const effect = ZfxServer.handleMutate(serverTransaction, serverMutators, {} as any, {} as any);
+  const effect = ZfxServer.handleMutate(serverTransaction, serverMutators, {} as any, {} as any, undefined);
 
   expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
 });
@@ -416,7 +417,7 @@ test("mutator requirements should propagate", () => {
       yield* DummyTag2;
     }),
   });
-  const serverEffect = ZfxServer.handleMutate(serverTransaction, mutators, {} as any, {} as any);
+  const serverEffect = ZfxServer.handleMutate(serverTransaction, mutators, {} as any, {} as any, undefined);
 
   expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
@@ -750,7 +751,7 @@ it.live(
       requestID: nanoid(),
     };
 
-    const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, body);
+    const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, body, undefined);
     expect(result).toMatchObject({ kind: "PushFailed", origin: "server", reason: "unsupportedPushVersion" });
   }),
 );

@@ -53,4 +53,33 @@ const TransformFailedMessage = Schema.Tuple([Schema.Literal("transformFailed"), 
 
 const TransformOkMessage = Schema.Tuple([Schema.Literal("transformed"), TransformResponseBody]);
 
-export const TransformResponseMessage = Schema.Union([TransformOkMessage, TransformFailedMessage]);
+/**
+ * The success response shape introduced in Zero 1.5. `handleQueryRequest` now emits
+ * `{ kind: "QueryResponse", ... }`; the legacy `["transformed", ...]` / `["transformFailed", ...]`
+ * tuple messages are retained in {@link QueryResponse} below for backwards compatibility.
+ */
+export const QuerySuccess = Schema.Struct({
+  kind: Schema.Literal("QueryResponse"),
+  // The userID passed to `handleQueryRequest`, echoed back. `null` for logged-out clients.
+  userID: Schema.optional(Schema.NullOr(Schema.String)),
+  queries: TransformResponseBody,
+});
+export type QuerySuccess = typeof QuerySuccess.Type;
+
+/**
+ * The response returned by `handleQueryRequest`. Since Zero 1.5 this is a superset: the current
+ * `QuerySuccess` (`{ kind: "QueryResponse", ... }`) and a bare `TransformFailedBody`, plus the
+ * legacy `["transformed", ...]` / `["transformFailed", ...]` tuple messages.
+ */
+export const QueryResponse = Schema.Union([
+  QuerySuccess,
+  TransformFailedBody,
+  TransformOkMessage,
+  TransformFailedMessage,
+]);
+export type QueryResponse = typeof QueryResponse.Type;
+
+/** @deprecated Renamed to {@link QueryResponse} in Zero 1.5. */
+export const TransformResponseMessage = QueryResponse;
+/** @deprecated Renamed to {@link QueryResponse} in Zero 1.5. */
+export type TransformResponseMessage = typeof QueryResponse.Type;
