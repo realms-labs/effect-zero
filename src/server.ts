@@ -127,10 +127,7 @@ export const handleMutate = Effect.fn(function* <
   });
 });
 
-const runMutation = Effect.fn(function* <R>(
-  mutators: Mutators.AnyMutators<R>,
-  mutation: { readonly name: string; readonly args: ReadonlyArray<ReadonlyJSONValue> },
-) {
+const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Types.Mutation) {
   // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
   const [namespace, name] = mutation.name.includes("|") ? Str.split(mutation.name, "|") : Str.split(mutation.name, ".");
 
@@ -157,7 +154,7 @@ const runMutation = Effect.fn(function* <R>(
 
 export const makeApplicationError = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
-  const message = Predicate.isError(error) && error.message ? error.message : "Internal error";
+  const message = Predicate.isError(error) ? error.message : "Internal error";
   return new ApplicationError(message, { cause: error });
 };
 
