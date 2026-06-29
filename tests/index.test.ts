@@ -264,7 +264,9 @@ const waitForLastItem = Effect.fn("waitForLastItem")(
 
 const initZero = Effect.gen(function* () {
   const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
-    userID: "anon",
+    // Logged-out client (`null`); `"anon"` was deprecated in Zero 1.4. Must match the server's
+    // echoed userID — the handlers pass `undefined` (-> `null`), so zero-cache enforces the match.
+    userID: null,
     server: "http://localhost:4848",
     mutateURL: "http://localhost:3000/push",
     queryURL: "http://localhost:3000/query",
@@ -713,7 +715,9 @@ it.live(
       nonExistingMutator: Effect.fn(function* () {}),
     });
     const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
-      userID: "anon",
+      // Logged-out client (`null`); `"anon"` was deprecated in Zero 1.4. Must match the server's
+      // echoed userID — the handlers pass `undefined` (-> `null`), so zero-cache enforces the match.
+      userID: null,
       server: "http://localhost:4848",
       mutateURL: "http://localhost:3000/push",
     });
