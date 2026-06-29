@@ -264,8 +264,6 @@ const waitForLastItem = Effect.fn("waitForLastItem")(
 
 const initZero = Effect.gen(function* () {
   const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
-    // Logged-out client (`null`); `"anon"` was deprecated in Zero 1.4. Must match the server's
-    // echoed userID — the handlers pass `undefined` (-> `null`), so zero-cache enforces the match.
     userID: null,
     server: "http://localhost:4848",
     mutateURL: "http://localhost:3000/push",
@@ -307,8 +305,14 @@ beforeAll(async () => {
       const params = yield* HttpRouter.schemaParams(PushParams);
       const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
       // `handleMutate` returns the upstream push response already in wire format, so no encoding step.
-      // No auth in this test harness, so the client is logged out (`userID: undefined`).
-      const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, payload, undefined);
+      // No auth in this test harness, so the client is logged out (`userId: undefined`).
+      const result = yield* ZfxServer.handleMutate({
+        transaction: serverTransaction,
+        mutators: serverMutators,
+        params,
+        request: payload,
+        userId: undefined,
+      });
 
       responses = Chunk.append(responses, result);
 
@@ -331,7 +335,7 @@ beforeAll(async () => {
     "/query",
     Effect.gen(function* () {
       const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-      const response = yield* ZfxServer.handleQuery(queries, schema, payload, undefined);
+      const response = yield* ZfxServer.handleQuery({ queries, schema, payload, userId: undefined });
       return yield* HttpServerResponse.json(response);
     }).pipe(
       Effect.catchCause(
@@ -371,7 +375,13 @@ test("server is running", async () => {
 });
 
 test("handleMutate has no extra requirements", () => {
-  const effect = ZfxServer.handleMutate(serverTransaction, serverMutators, {} as any, {} as any, undefined);
+  const effect = ZfxServer.handleMutate({
+    transaction: serverTransaction,
+    mutators: serverMutators,
+    params: {} as any,
+    request: {} as any,
+    userId: undefined,
+  });
 
   expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
 });
@@ -419,7 +429,13 @@ test("mutator requirements should propagate", () => {
       yield* DummyTag2;
     }),
   });
-  const serverEffect = ZfxServer.handleMutate(serverTransaction, mutators, {} as any, {} as any, undefined);
+  const serverEffect = ZfxServer.handleMutate({
+    transaction: serverTransaction,
+    mutators,
+    params: {} as any,
+    request: {} as any,
+    userId: undefined,
+  });
 
   expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
@@ -715,8 +731,6 @@ it.live(
       nonExistingMutator: Effect.fn(function* () {}),
     });
     const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
-      // Logged-out client (`null`); `"anon"` was deprecated in Zero 1.4. Must match the server's
-      // echoed userID — the handlers pass `undefined` (-> `null`), so zero-cache enforces the match.
       userID: null,
       server: "http://localhost:4848",
       mutateURL: "http://localhost:3000/push",
@@ -755,7 +769,13 @@ it.live(
       requestID: nanoid(),
     };
 
-    const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, body, undefined);
+    const result = yield* ZfxServer.handleMutate({
+      transaction: serverTransaction,
+      mutators: serverMutators,
+      params,
+      request: body,
+      userId: undefined,
+    });
     expect(result).toMatchObject({ kind: "PushFailed", origin: "server", reason: "unsupportedPushVersion" });
   }),
 );

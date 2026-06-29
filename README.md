@@ -107,13 +107,19 @@ export async function handleZeroPush(req: Request): Promise<Response> {
   });
   const payload = Schema.decodeSync(PushBody)(await req.json());
 
-  // The authenticated user ID (e.g. derived from a verified session/JWT). Use `null`/`undefined`
+  // The authenticated user id (e.g. derived from a verified session/JWT). Use `null`/`undefined`
   // for logged-out clients. Since Zero 1.5 this is echoed back so zero-cache can enforce that only
   // tabs belonging to the same user share a client group.
-  const userID: string | null | undefined = undefined;
+  const userId: string | null | undefined = undefined;
 
   const responseBody = await Effect.runPromise(
-    Server.handleMutate(serverTransaction, serverMutators, urlParams, payload, userID),
+    Server.handleMutate({
+      transaction: serverTransaction,
+      mutators: serverMutators,
+      params: urlParams,
+      request: payload,
+      userId,
+    }),
   );
   return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
 }
@@ -201,9 +207,9 @@ import { schema } from "./schema"; // your schema
 // See `handleZeroPush` notes
 export async function handleZeroQueryRequest(req: Request): Promise<Response> {
   const payload = Schema.decodeSync(TransformRequestMessage)(await req.json());
-  // The authenticated user ID (or `null`/`undefined` for logged-out clients), echoed back to Zero.
-  const userID: string | null | undefined = undefined;
-  const result = await Effect.runPromise(Server.handleQuery(queries, schema, payload, userID));
+  // The authenticated user id (or `null`/`undefined` for logged-out clients), echoed back to Zero.
+  const userId: string | null | undefined = undefined;
+  const result = await Effect.runPromise(Server.handleQuery({ queries, schema, payload, userId }));
   return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
 }
 ```

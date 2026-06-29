@@ -37,19 +37,29 @@ import type { TransformRequestMessage } from "./types/queries.js";
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
+// The userId type, pulled from the upstream handlers. We read it off the response type rather than
+// `Parameters<...>[0]` because the handlers are overloaded (so `Parameters` resolves to the wrong
+// overload) and their argument type isn't exported.
+type MutateUserId = Extract<Awaited<ReturnType<typeof handleMutateRequest>>, { kind: "MutateResponse" }>["userID"];
+type QueryUserId = Extract<Awaited<ReturnType<typeof handleQueryRequest>>, { kind: "QueryResponse" }>["userID"];
+
 export const handleMutate = Effect.fn(function* <
   TSchema extends ZeroSchema,
   TTransaction,
   TMutators extends Mutators.AnyMutators,
->(
-  transaction: ServerTransaction.Context<TSchema, TTransaction>,
-  mutators: TMutators,
-  params: Types.PushParams,
-  request: Types.PushBody,
-  // The authenticated user ID (or `null`/`undefined` for logged-out clients). Since Zero 1.5 this is
-  // echoed back so zero-cache can enforce that only tabs belonging to the same user share a client group.
-  userID: string | null | undefined,
-) {
+>({
+  transaction,
+  mutators,
+  params,
+  request,
+  userId,
+}: {
+  transaction: ServerTransaction.Context<TSchema, TTransaction>;
+  mutators: TMutators;
+  params: Types.PushParams;
+  request: Types.PushBody;
+  userId: MutateUserId;
+}) {
   const ctx =
     yield* Effect.context<
       Exclude<
@@ -125,7 +135,7 @@ export const handleMutate = Effect.fn(function* <
           ),
         query: params,
         body: request as ReadonlyJSONValue,
-        userID,
+        userID: userId,
       }),
     catch: (e) => new HandleMutateError({ cause: Cause.fail(e) }),
   });
@@ -176,13 +186,17 @@ class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
 
 class HandleMutateError extends Data.TaggedError("HandleMutateError")<{ readonly cause: Cause.Cause<unknown> }> {}
 
-export const handleQuery = Effect.fn(function* <E, R1, R2>(
-  queries: MakeQueryResult<E, R1, R2>[],
-  schema: ZeroSchema,
-  payload: TransformRequestMessage,
-  // The authenticated user ID (or `null`/`undefined` for logged-out clients), echoed back to Zero.
-  userID: string | null | undefined,
-) {
+export const handleQuery = Effect.fn(function* <E, R1, R2>({
+  queries,
+  schema,
+  payload,
+  userId,
+}: {
+  queries: MakeQueryResult<E, R1, R2>[];
+  schema: ZeroSchema;
+  payload: TransformRequestMessage;
+  userId: QueryUserId;
+}) {
   const ctx = yield* Effect.context<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
@@ -198,7 +212,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
         // `query` params are unused by the query endpoint at runtime but required by the options type.
         query: {},
         body: payload as ReadonlyJSONValue,
-        userID,
+        userID: userId,
       }),
     catch: (e) => new HandleQueryError({ cause: Cause.fail(e) }),
   });
