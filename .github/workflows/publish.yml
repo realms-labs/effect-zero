@@ -45,4 +45,4 @@ jobs:
           bun run test
       - name: Publish
         shell: bash
-        run: npm publish package.tgz --provenance --access public
+        run: npm publish package.tgz --provenance --access public --tag next
