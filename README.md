@@ -5,11 +5,11 @@
 ```ts
 // mutators.ts
 
-import * as Mutators from "effect-zero/mutators";
+import * as ZfxMutators from "effect-zero/mutators";
 
 // Define your mutators schema
 // Both root-level and nested mutators are supported (up to 1 level of nesting)
-export const mutatorSchema = Mutators.schema({
+export const mutatorSchema = ZfxMutators.schema({
   // root-level mutator
   /*
   foo: Schema.Struct({
@@ -39,10 +39,11 @@ export const mutatorSchema = Mutators.schema({
 // server.ts
 
 import { zeroPostgresJS } from "@rocicorp/zero/server/adapters/postgresjs";
-import { PushParams, PushBody } from "effect-zero/types/push";
-import * as ServerTransaction from "effect-zero/server-transaction";
-import * as Mutators from "effect-zero/mutators";
-import * as Server from "effect-zero/server";
+import * as ZfxMutateServerTypes from "effect-zero/types/mutate-server";
+import * as ZfxPushTypes from "effect-zero/types/push";
+import * as ZfxServerTransaction from "effect-zero/server-transaction";
+import * as ZfxMutators from "effect-zero/mutators";
+import * as ZfxServer from "effect-zero/server";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import postgres from "postgres";
@@ -60,7 +61,7 @@ const database = zeroPostgresJS(
 );
 
 // The "server-side" transaction
-const serverTransaction = ServerTransaction.make(
+const serverTransaction = ZfxServerTransaction.make(
   "ServerTransaction",
   database,
   // passing a client transaction allows us to use the client mutators on the server side
@@ -68,7 +69,7 @@ const serverTransaction = ServerTransaction.make(
 );
 
 // define server mutators
-export const serverMutators = Mutators.make(mutatorSchema, {
+export const serverMutators = ZfxMutators.make(mutatorSchema, {
   todo: {
     create: ({ id, title }) => Effect.gen(function* () {
       // Note, we can run arbitrary logic before/after performing the zero transaction
@@ -101,13 +102,22 @@ export const serverMutators = Mutators.make(mutatorSchema, {
 // if your server framework is effect-based (like Effect HTTP module)
 export async function handleZeroPush(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  const urlParams = Schema.decodeSync(PushParams)({
+  const query = Schema.decodeSync(ZfxMutateServerTypes.MutateParams)({
     schema: url.searchParams.get("schema")!,
     appID: url.searchParams.get("appID")!,
   });
-  const payload = Schema.decodeSync(PushBody)(await req.json());
+  const body = Schema.decodeSync(ZfxPushTypes.PushBody)(await req.json());
 
-  const responseBody = await Effect.runPromise(Server.handleMutate(serverTransaction, serverMutators, urlParams, payload));
+  const responseBody = await Effect.runPromise(
+    ZfxServer.handleMutate({
+      transaction: serverTransaction,
+      mutators: serverMutators,
+      query,
+      body,
+      // The authenticated user id (or `null`/`undefined` for logged-out clients).
+      userId: undefined,
+    }),
+  );
   return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
 }
 ```
@@ -116,17 +126,17 @@ export async function handleZeroPush(req: Request): Promise<Response> {
 
 ```ts
 // client.ts
-import * as Client from "effect-zero/client";
-import * as ClientTransaction from "effect-zero/client-transaction";
-import * as Mutators from "effect-zero/mutators";
+import * as ZfxClient from "effect-zero/client";
+import * as ZfxClientTransaction from "effect-zero/client-transaction";
+import * as ZfxMutators from "effect-zero/mutators";
 import * as Effect from "effect/Effect";
 import { schema } from "./schema"; // your schema
 import { mutatorSchema } from "./mutators"; // see above
 
 // The "client-side" transaction
-export const clientTransaction = ClientTransaction.make("ClientTransaction", schema);
+export const clientTransaction = ZfxClientTransaction.make("ClientTransaction", schema);
 
-export const clientMutators = Mutators.make(mutatorSchema, {
+export const clientMutators = ZfxMutators.make(mutatorSchema, {
   todo: {
     create: Effect.fn(function* ({ id, title }) {
       yield* clientTransaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
@@ -139,9 +149,9 @@ export const clientMutators = Mutators.make(mutatorSchema, {
 
 // Helper to create a vanilla Zero client instance for querying and mutating
 export const createZero = Effect.fn(function* (opts: { userID: string; auth?: string; server: string; mutateURL: string }) {
-  // `Client.make` returns an Effect containing a Zero client instance
+  // `ZfxClient.make` returns an Effect containing a Zero client instance
   // Note: this is a scoped effect, so it must be run within a scope (e.g., Effect.scoped)
-  return yield* Client.make(clientTransaction, clientMutators, {
+  return yield* ZfxClient.make(clientTransaction, clientMutators, {
     userID: opts.userID,
     auth: opts.auth,
     server: opts.server, // your zero-cache server URL
@@ -159,14 +169,14 @@ export const createZero = Effect.fn(function* (opts: { userID: string; auth?: st
 // queries.ts
 
 import { createBuilder } from "@rocicorp/zero";
-import * as Query from "effect-zero/query";
+import * as ZfxQuery from "effect-zero/query";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { schema } from "./schema"; // your schema
 
 const builder = createBuilder(schema);
 
-export const getTodoByIdQuery = Query.make({
+export const getTodoByIdQuery = ZfxQuery.make({
   name: "getTodoById",
   payload: Schema.Tuple(Schema.String),
   query: Effect.fn(function* (id) {
@@ -184,8 +194,8 @@ export const queries = [
 ```ts
 // server.ts
 
-import * as Server from "effect-zero/server";
-import { TransformRequestMessage } from "effect-zero/types/queries";
+import * as ZfxServer from "effect-zero/server";
+import * as ZfxCustomQueriesTypes from "effect-zero/types/custom-queries";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { queries } from "./queries";
@@ -193,8 +203,16 @@ import { schema } from "./schema"; // your schema
 
 // See `handleZeroPush` notes
 export async function handleZeroQueryRequest(req: Request): Promise<Response> {
-  const payload = Schema.decodeSync(TransformRequestMessage)(await req.json());
-  const result = await Effect.runPromise(Server.handleQuery(queries, schema, payload));
+  const body = Schema.decodeSync(ZfxCustomQueriesTypes.TransformRequestMessage)(await req.json());
+  const result = await Effect.runPromise(
+    ZfxServer.handleQuery({
+      queries,
+      schema,
+      body,
+      // The authenticated user id (or `null`/`undefined` for logged-out clients).
+      userId: undefined,
+    }),
+  );
   return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
 }
 ```
@@ -205,7 +223,7 @@ export async function handleZeroQueryRequest(req: Request): Promise<Response> {
 // client.ts
 
 import * as Effect from 'effect/Effect';
-import * as Query from "effect-zero/query";
+import * as ZfxQuery from "effect-zero/query";
 import { getTodoByIdQuery } from "./queries";
 import { createZero } from "./client"; // see "Custom mutators" -> "Client setup"
 
@@ -213,13 +231,14 @@ const getTodoById = Effect.fn(function* (id: string) {
   // Create the query instance
   const query = yield* getTodoByIdQuery(id);
 
-  const zero = yield* createZero({ userID: "anon", server: "http://localhost:4848" });
+  // Pass the real user ID (or `null`/`undefined` for logged-out clients).
+  const zero = yield* createZero({ userID: "user-123", server: "http://localhost:4848" });
 
-  // `Query.stream` creates an Effect's Stream from a query
-  const stream = Query.stream(zero, query);
+  // `ZfxQuery.stream` creates an Effect's Stream from a query
+  const stream = ZfxQuery.stream(zero, query);
 
-  // `Query.subscribable` creates an Effect's Subscribable from a query
-  const sub = Query.subscribable(zero, query);
+  // `ZfxQuery.subscribable` creates an Effect's Subscribable from a query
+  const sub = ZfxQuery.subscribable(zero, query);
 
   // You can also use the query with the Zero client as usual
   const view = yield* Effect.sync(() => zero.materialize(query));
@@ -234,7 +253,7 @@ You might want to create atoms with query results. To do that, you can implement
 import { Atom } from "@effect-atom/atom";
 import * as Effect from "effect/Effect";
 import * as Subscribable from "effect/Subscribable";
-import * as Query from "effect-zero/query";
+import * as ZfxQuery from "effect-zero/query";
 
 import type { schema } from "./schema"; // your schema
 import { zeroAtom } from "./zero"; // you can create zeroAtom using `createZero` from the "Client setup" section as a reference
@@ -242,11 +261,11 @@ import { zeroAtom } from "./zero"; // you can create zeroAtom using `createZero`
 type Schema = typeof schema;
 
 export const queryAtom = Atom.family(
-  <T extends keyof Schema["tables"] & string, R>(query: Query.Query<T, Schema, R>) => {
+  <T extends keyof Schema["tables"] & string, R>(query: ZfxQuery.Query<T, Schema, R>) => {
     return Atom.subscribable(
       Effect.fn(function* (get) {
         const zero = yield* get.result(zeroAtom);
-        return Query.subscribable(zero, query).pipe(Subscribable.map(({ value }) => value));
+        return ZfxQuery.subscribable(zero, query).pipe(Subscribable.map(({ value }) => value));
       }),
     );
   },
@@ -264,7 +283,7 @@ const todoAtom = Atom.fn(Effect.fn(function* (id: string, get: Atom.FnContext) {
 });
 ```
 
-> **Note:** Queries created via `Query.make` implement the [`Equal` trait](https://effect.website/docs/trait/equal/), so `Atom.family` would properly cache the results when using queries as arguments.
+> **Note:** Queries created via `ZfxQuery.make` implement the [`Equal` trait](https://effect.website/docs/trait/equal/), so `Atom.family` would properly cache the results when using queries as arguments.
 
 ## Differences from the original implementation
 

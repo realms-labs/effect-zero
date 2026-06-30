@@ -27,26 +27,40 @@ import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
 import { DatabaseSymbol, ServerTransactionCallbackSymbol } from "./server-transaction.js";
-import type * as Types from "./types/push.js";
-import type { TransformRequestMessage } from "./types/queries.js";
+import type { TransformRequestMessage } from "./types/custom-queries.js";
+import type { MutateParams } from "./types/mutate-server.js";
+import type { Mutation } from "./types/mutation.js";
+import type { PushBody } from "./types/push.js";
 
 // Updated to:
-// https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
-// https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
+// https://github.com/rocicorp/mono/blob/0eeabd495a26d0d67b9a5a81c424d8a76ef004b7/packages/zero-server/src/process-mutations.ts#L214
 
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
+
+// The userId type, pulled from the upstream handlers. We read it off the response type rather than
+// `Parameters<...>[0]` because the handlers are overloaded (so `Parameters` resolves to the wrong
+// overload) and their argument type isn't exported.
+type MutateUserId = Extract<Awaited<ReturnType<typeof handleMutateRequest>>, { kind: "MutateResponse" }>["userID"];
+type QueryUserId = Extract<Awaited<ReturnType<typeof handleQueryRequest>>, { kind: "QueryResponse" }>["userID"];
 
 export const handleMutate = Effect.fn(function* <
   TSchema extends ZeroSchema,
   TTransaction,
   TMutators extends Mutators.AnyMutators,
->(
-  transaction: ServerTransaction.Context<TSchema, TTransaction>,
-  mutators: TMutators,
-  params: Types.PushParams,
-  request: Types.PushBody,
-) {
+>({
+  transaction,
+  mutators,
+  query,
+  body,
+  userId,
+}: {
+  transaction: ServerTransaction.Context<TSchema, TTransaction>;
+  mutators: TMutators;
+  query: MutateParams;
+  body: PushBody;
+  userId: MutateUserId;
+}) {
   const ctx =
     yield* Effect.context<
       Exclude<
@@ -58,9 +72,9 @@ export const handleMutate = Effect.fn(function* <
 
   return yield* Effect.tryPromise({
     try: () =>
-      handleMutateRequest(
-        transaction[DatabaseSymbol],
-        (transact_, mutation) =>
+      handleMutateRequest({
+        dbProvider: transaction[DatabaseSymbol],
+        handler: (transact_, mutation) =>
           Effect.gen(function* () {
             const response = yield* Deferred.make<Awaited<ReturnType<typeof transact_>>>();
 
@@ -120,14 +134,15 @@ export const handleMutate = Effect.fn(function* <
             Effect.provide(ctx),
             Effect.runPromise,
           ),
-        params,
-        request as ReadonlyJSONValue,
-      ),
+        query,
+        body: body as ReadonlyJSONValue,
+        userID: userId,
+      }),
     catch: (e) => new HandleMutateError({ cause: Cause.fail(e) }),
   });
 });
 
-const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Types.Mutation) {
+const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Mutation) {
   // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
   const [namespace, name] = mutation.name.includes("|") ? Str.split(mutation.name, "|") : Str.split(mutation.name, ".");
 
@@ -172,16 +187,22 @@ class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
 
 class HandleMutateError extends Data.TaggedError("HandleMutateError")<{ readonly cause: Cause.Cause<unknown> }> {}
 
-export const handleQuery = Effect.fn(function* <E, R1, R2>(
-  queries: MakeQueryResult<E, R1, R2>[],
-  schema: ZeroSchema,
-  payload: TransformRequestMessage,
-) {
+export const handleQuery = Effect.fn(function* <E, R1, R2>({
+  queries,
+  schema,
+  body,
+  userId,
+}: {
+  queries: MakeQueryResult<E, R1, R2>[];
+  schema: ZeroSchema;
+  body: TransformRequestMessage;
+  userId: QueryUserId;
+}) {
   const ctx = yield* Effect.context<R1 | R2>();
   return yield* Effect.tryPromise({
     try: () =>
-      handleQueryRequest(
-        (name, args) =>
+      handleQueryRequest({
+        handler: (name, args) =>
           Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
             Effect.fromOption,
             Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
@@ -189,8 +210,11 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>(
             Effect.runSyncWith(ctx),
           ),
         schema,
-        payload as ReadonlyJSONValue,
-      ),
+        // `query` params are unused by the query endpoint at runtime but required by the options type.
+        query: {},
+        body: body as ReadonlyJSONValue,
+        userID: userId,
+      }),
     catch: (e) => new HandleQueryError({ cause: Cause.fail(e) }),
   });
 });

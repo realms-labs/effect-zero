@@ -33,8 +33,9 @@ import * as ZfxQuery from "effect-zero/query";
 import * as ZfxResult from "effect-zero/result";
 import * as ZfxServer from "effect-zero/server";
 import * as ZfxServerTransaction from "effect-zero/server-transaction";
-import { PushBody, PushParams, type PushResponse } from "effect-zero/types/push";
-import { TransformRequestMessage } from "effect-zero/types/queries";
+import { TransformRequestMessage } from "effect-zero/types/custom-queries";
+import { MutateParams, type MutateResponse } from "effect-zero/types/mutate-server";
+import { PushBody } from "effect-zero/types/push";
 import { nanoid } from "nanoid";
 import postgres from "postgres";
 import { WebSocket } from "undici";
@@ -264,7 +265,7 @@ const waitForLastItem = Effect.fn("waitForLastItem")(
 
 const initZero = Effect.gen(function* () {
   const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
-    userID: "anon",
+    userID: null,
     server: "http://localhost:4848",
     mutateURL: "http://localhost:3000/push",
     queryURL: "http://localhost:3000/query",
@@ -295,17 +296,24 @@ const initZero = Effect.gen(function* () {
   return z;
 });
 
-let responses = Chunk.empty<PushResponse>();
+let responses = Chunk.empty<MutateResponse>();
 
 beforeAll(async () => {
   const pushRoute = HttpRouter.add(
     "POST",
     "/push",
     Effect.gen(function* () {
-      const params = yield* HttpRouter.schemaParams(PushParams);
+      const params = yield* HttpRouter.schemaParams(MutateParams);
       const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
       // `handleMutate` returns the upstream push response already in wire format, so no encoding step.
-      const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, payload);
+      // No auth in this test harness, so the client is logged out (`userId: undefined`).
+      const result = yield* ZfxServer.handleMutate({
+        transaction: serverTransaction,
+        mutators: serverMutators,
+        query: params,
+        body: payload,
+        userId: undefined,
+      });
 
       responses = Chunk.append(responses, result);
 
@@ -328,7 +336,7 @@ beforeAll(async () => {
     "/query",
     Effect.gen(function* () {
       const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-      const response = yield* ZfxServer.handleQuery(queries, schema, payload);
+      const response = yield* ZfxServer.handleQuery({ queries, schema, body: payload, userId: undefined });
       return yield* HttpServerResponse.json(response);
     }).pipe(
       Effect.catchCause(
@@ -359,7 +367,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  responses = Chunk.empty<PushResponse>();
+  responses = Chunk.empty<MutateResponse>();
 });
 
 test("server is running", async () => {
@@ -368,7 +376,13 @@ test("server is running", async () => {
 });
 
 test("handleMutate has no extra requirements", () => {
-  const effect = ZfxServer.handleMutate(serverTransaction, serverMutators, {} as any, {} as any);
+  const effect = ZfxServer.handleMutate({
+    transaction: serverTransaction,
+    mutators: serverMutators,
+    query: {} as any,
+    body: {} as any,
+    userId: undefined,
+  });
 
   expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
 });
@@ -416,7 +430,13 @@ test("mutator requirements should propagate", () => {
       yield* DummyTag2;
     }),
   });
-  const serverEffect = ZfxServer.handleMutate(serverTransaction, mutators, {} as any, {} as any);
+  const serverEffect = ZfxServer.handleMutate({
+    transaction: serverTransaction,
+    mutators,
+    query: {} as any,
+    body: {} as any,
+    userId: undefined,
+  });
 
   expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
 });
@@ -712,7 +732,7 @@ it.live(
       nonExistingMutator: Effect.fn(function* () {}),
     });
     const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
-      userID: "anon",
+      userID: null,
       server: "http://localhost:4848",
       mutateURL: "http://localhost:3000/push",
     });
@@ -741,7 +761,7 @@ it.live(
   "unsupported push version returns a top-level PushFailed",
   Effect.fn(function* () {
     // The push-version check runs before any DB/client logic, so dummy params + an empty batch suffice.
-    const params: PushParams = { schema: "public", appID: "zero" };
+    const params: MutateParams = { schema: "public", appID: "zero" };
     const body: PushBody = {
       clientGroupID: nanoid(),
       mutations: [],
@@ -750,7 +770,13 @@ it.live(
       requestID: nanoid(),
     };
 
-    const result = yield* ZfxServer.handleMutate(serverTransaction, serverMutators, params, body);
+    const result = yield* ZfxServer.handleMutate({
+      transaction: serverTransaction,
+      mutators: serverMutators,
+      query: params,
+      body,
+      userId: undefined,
+    });
     expect(result).toMatchObject({ kind: "PushFailed", origin: "server", reason: "unsupportedPushVersion" });
   }),
 );

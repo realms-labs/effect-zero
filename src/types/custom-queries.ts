@@ -1,12 +1,10 @@
 import * as Schema from "effect/Schema";
+import { Ast } from "./ast.js";
 import { JsonSchema } from "./common.js";
 import { TransformFailedBody } from "./error.js";
 
 // The code below was converted to Effect Schema from:
-// https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/zero-protocol/src/custom-queries.ts
-
-/** TODO: Defined as unknown for now */
-const Ast = Schema.Unknown;
+// https://github.com/rocicorp/mono/blob/74273167af5d15ed07045e04165cb04d3983d44f/packages/zero-protocol/src/custom-queries.ts
 
 const TransformRequestBody = Schema.Array(
   Schema.Struct({
@@ -16,7 +14,7 @@ const TransformRequestBody = Schema.Array(
   }),
 );
 
-const TransformedQuery = Schema.Struct({
+export const TransformedQuery = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   ast: Ast,
@@ -39,7 +37,7 @@ const ParseErroredQuery = Schema.Struct({
   details: Schema.optional(JsonSchema),
 });
 
-const ErroredQuery = Schema.Union([AppErroredQuery, ParseErroredQuery]);
+export const ErroredQuery = Schema.Union([AppErroredQuery, ParseErroredQuery]);
 
 const TransformResponseBody = Schema.Array(Schema.Union([TransformedQuery, ErroredQuery]));
 
