@@ -165,7 +165,7 @@ describe("Type tests", () => {
         },
       });
 
-      const serverEffect = Server.handleMutate({ transaction: serverTransaction, mutators, params: {} as any, request: {} as any, userId: undefined });
+      const serverEffect = Server.handleMutate({ transaction: serverTransaction, mutators, query: {} as any, body: {} as any, userId: undefined });
 
       // Server effect should require both NestedDummyTag and NestedDummyTag2
       expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<NestedDummyTag | NestedDummyTag2>();
@@ -193,7 +193,7 @@ describe("Type tests", () => {
         }),
       });
 
-      const serverEffect = Server.handleMutate({ transaction: serverTransaction, mutators, params: {} as any, request: {} as any, userId: undefined });
+      const serverEffect = Server.handleMutate({ transaction: serverTransaction, mutators, query: {} as any, body: {} as any, userId: undefined });
 
       // Server effect should require both DummyTag and DummyTag2
       expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
@@ -211,7 +211,7 @@ describe("Type tests", () => {
         simple: Effect.fn(function* () {}),
       });
 
-      const effect = Server.handleMutate({ transaction: serverTransaction, mutators, params: {} as any, request: {} as any, userId: undefined });
+      const effect = Server.handleMutate({ transaction: serverTransaction, mutators, query: {} as any, body: {} as any, userId: undefined });
 
       expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
     });

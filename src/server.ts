@@ -27,12 +27,13 @@ import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
 import { DatabaseSymbol, ServerTransactionCallbackSymbol } from "./server-transaction.js";
-import type * as Types from "./types/push.js";
-import type { TransformRequestMessage } from "./types/queries.js";
+import type { TransformRequestMessage } from "./types/custom-queries.js";
+import type { MutateParams } from "./types/mutate-server.js";
+import type { Mutation } from "./types/mutation.js";
+import type { PushBody } from "./types/push.js";
 
 // Updated to:
-// https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/push-processor.ts
-// https://github.com/rocicorp/mono/blob/3082c9fa061891067b4bd7dc9fe74f798270d8d7/packages/zero-server/src/process-mutations.ts
+// https://github.com/rocicorp/mono/blob/0eeabd495a26d0d67b9a5a81c424d8a76ef004b7/packages/zero-server/src/process-mutations.ts#L214
 
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
@@ -50,14 +51,14 @@ export const handleMutate = Effect.fn(function* <
 >({
   transaction,
   mutators,
-  params,
-  request,
+  query,
+  body,
   userId,
 }: {
   transaction: ServerTransaction.Context<TSchema, TTransaction>;
   mutators: TMutators;
-  params: Types.PushParams;
-  request: Types.PushBody;
+  query: MutateParams;
+  body: PushBody;
   userId: MutateUserId;
 }) {
   const ctx =
@@ -133,15 +134,15 @@ export const handleMutate = Effect.fn(function* <
             Effect.provide(ctx),
             Effect.runPromise,
           ),
-        query: params,
-        body: request as ReadonlyJSONValue,
+        query,
+        body: body as ReadonlyJSONValue,
         userID: userId,
       }),
     catch: (e) => new HandleMutateError({ cause: Cause.fail(e) }),
   });
 });
 
-const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Types.Mutation) {
+const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Mutation) {
   // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
   const [namespace, name] = mutation.name.includes("|") ? Str.split(mutation.name, "|") : Str.split(mutation.name, ".");
 
@@ -189,12 +190,12 @@ class HandleMutateError extends Data.TaggedError("HandleMutateError")<{ readonly
 export const handleQuery = Effect.fn(function* <E, R1, R2>({
   queries,
   schema,
-  payload,
+  body,
   userId,
 }: {
   queries: MakeQueryResult<E, R1, R2>[];
   schema: ZeroSchema;
-  payload: TransformRequestMessage;
+  body: TransformRequestMessage;
   userId: QueryUserId;
 }) {
   const ctx = yield* Effect.context<R1 | R2>();
@@ -211,7 +212,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>({
         schema,
         // `query` params are unused by the query endpoint at runtime but required by the options type.
         query: {},
-        body: payload as ReadonlyJSONValue,
+        body: body as ReadonlyJSONValue,
         userID: userId,
       }),
     catch: (e) => new HandleQueryError({ cause: Cause.fail(e) }),
