@@ -2,13 +2,13 @@
   "name": "tests",
   "module": "index.ts",
   "dependencies": {
-    "@effect/platform-node": "^4.0.0-beta.78",
-    "@effect/vitest": "^4.0.0-beta.78",
-    "@rocicorp/zero": "1.8.0",
+    "@effect/platform-node": "4.0.2",
+    "@effect/vitest": "4.0.2",
+    "@rocicorp/zero": "1.10.0",
     "bun-storage": "^1.1.1",
     "drizzle-orm": "^0.44.5",
     "drizzle-zero": "^0.14.0",
-    "effect": "^4.0.0-beta.78",
+    "effect": "4.0.2",
     "effect-zero": "../package.tgz",
     "nanoid": "^5.1.5",
     "undici": "^7.16.0"
@@ -16,7 +16,7 @@
   "devDependencies": {
     "@types/bun": "^1.2.22",
     "drizzle-kit": "^0.31.4",
-    "vitest": "^3.2.4"
+    "vitest": "^5.0.3"
   },
   "private": true,
   "scripts": {

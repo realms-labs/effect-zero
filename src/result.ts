@@ -5,14 +5,14 @@ import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Struct from "effect/Struct";
-import { AsyncResult } from "effect/unstable/reactivity";
 import type { QueryResult } from "./internal/query-result.js";
 
 /*
 ### Introduction
 
-When using `effect/unstable/reactivity` (atoms) with effect-zero, you will often have atoms which contain a type in the form of
+When using `effect/reactivity` (atoms) with effect-zero, you will often have atoms which contain a type in the form of
 
 `AsyncResult<QueryResult<A>, E>`
 
