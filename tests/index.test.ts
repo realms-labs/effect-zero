@@ -64,6 +64,7 @@ const mutatorSchema = ZfxMutators.schema({
     deleteAll: Schema.Void,
   },
   optionalVoidArg: Schema.Void,
+  nullableArg: Schema.NullOr(Schema.Struct({ id: Schema.String, body: Schema.String })),
   transformArgs: Schema.Struct({
     foo: Schema.NumberFromString,
   }),
@@ -114,6 +115,11 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
   optionalVoidArg: Effect.fn(function* (a) {}),
+  nullableArg: Effect.fn(function* (msg) {
+    yield* clientTransaction.use(async (tx) => {
+      if (msg !== null) await tx.mutate.messages.insert(msg);
+    });
+  }),
   transformArgs: Effect.fn(function* (a) {
     return yield* transformArgsClient(a);
   }),
@@ -146,6 +152,7 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
     }),
   },
   optionalVoidArg: Effect.fn(function* () {}),
+  nullableArg: (msg) => clientMutators.nullableArg(msg).pipe(serverTransaction.execute),
   transformArgs: Effect.fn(function* (a) {
     return yield* transformArgsServer(a).pipe(serverTransaction.execute);
   }),
@@ -771,6 +778,24 @@ it.live(
         message: "Mutator not found: nonExistingMutator",
       }),
     });
+  }),
+);
+
+it.live(
+  "nullable mutator arguments accept null",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    // `null` must reach a `Schema.NullOr` decoder as-is on both the client and the server.
+    const nullResult = z.mutate.nullableArg(null);
+    yield* Effect.promise(() => expect(nullResult.client).resolves.toEqual({ type: "success" }));
+    yield* Effect.promise(() => expect(nullResult.server).resolves.toEqual({ type: "success" }));
+
+    const id = nanoid();
+    const result = z.mutate.nullableArg({ id, body: "hello" });
+    yield* Effect.promise(() => expect(result.server).resolves.toEqual({ type: "success" }));
+    const rows = yield* Effect.promise(() => rawDb`select body from messages where id = ${id}`);
+    expect(rows).toEqual([{ body: "hello" }]);
   }),
 );
 

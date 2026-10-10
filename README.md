@@ -33,6 +33,9 @@ export const mutatorSchema = ZfxMutators.schema({
 });
 ```
 
+> [!NOTE]
+> Zero stores and sends `undefined` mutator args as `null`, so a mutator may receive `null` where `undefined` was passed. Use `Schema.Void` for mutators without arguments, and `Schema.NullOr(...)` (not `Schema.UndefinedOr(...)`) for optional arguments.
+
 ### Server setup
 
 ```ts

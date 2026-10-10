@@ -2,18 +2,18 @@ import type { ReadonlyJSONValue } from "@rocicorp/zero";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
-import { normalizeArgs } from "./utils.js";
 
 const toStandardSchemaFailure = SchemaIssue.makeFormatterStandardSchemaV1();
 
 /**
- * Decode mutator args, collecting every issue like a `defineMutator` Standard Schema validator does.
+ * Decode mutator args as they arrive, collecting every issue like a `defineMutator` Standard Schema validator does.
+ * Like upstream, `undefined` args are not restored: Zero stores and sends them as `null`.
  */
 export const decodeArgs = <S extends Schema.Codec<unknown, unknown, unknown, unknown>>(
   schema: S,
   args: unknown,
 ): Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]> =>
-  Schema.decodeUnknownEffect(schema)(normalizeArgs(args), { errors: "all" });
+  Schema.decodeUnknownEffect(schema)(args, { errors: "all" });
 
 /**
  * Message and details of upstream's `InputValidationError`, so a mutator whose args fail to decode reports the same
