@@ -543,7 +543,7 @@ it.live(
 );
 
 it.live(
-  "schema validation rejects invalid mutator arguments",
+  "client schema validation rejects invalid mutator arguments",
   Effect.fn(function* () {
     const z = yield* initZero;
 
