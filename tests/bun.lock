@@ -581,7 +581,7 @@
 
     "effect": ["effect@4.0.2", "", {}, "sha512-YeYnLqSFrL4+tCOXRrfNP03w8FILoF/wDl+ukraJAGzXrjcS383W7LAAvGBbLatEyktmLxRq+9xJinx7QzXW5A=="],
 
-    "effect-zero": ["effect-zero@../package.tgz", { "peerDependencies": { "@rocicorp/zero": ">=1.10.0", "effect": "^4.0.0" } }, "sha512-wtwUnLjyZ1wg+YepeKQxdFZcapYoNvz3vooFAtp/1E2xa9FS0BDL37+T+9POswjPn9ATYpSPybM3+8n9MTcueQ=="],
+    "effect-zero": ["effect-zero@../package.tgz", { "peerDependencies": { "@rocicorp/zero": ">=1.10.0", "effect": "^4.0.0" } }],
 
     "emoji-regex": ["emoji-regex@8.0.0", "", {}, "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="],
 
