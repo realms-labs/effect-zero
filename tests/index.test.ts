@@ -18,14 +18,14 @@ import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { Chunk, Console, Context, Duration, Effect, Latch, Layer, Option, pipe, Schema, Stream } from "effect";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Predicate from "effect/Predicate";
+import * as Atom from "effect/reactivity/Atom";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as SchemaGetter from "effect/SchemaGetter";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import * as Atom from "effect/unstable/reactivity/Atom";
-import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import * as ZfxClient from "effect-zero/client";
 import * as ZfxClientTransaction from "effect-zero/client-transaction";
 import * as ZfxMutators from "effect-zero/mutators";
@@ -64,6 +64,7 @@ const mutatorSchema = ZfxMutators.schema({
     deleteAll: Schema.Void,
   },
   optionalVoidArg: Schema.Void,
+  nullableArg: Schema.NullOr(Schema.Struct({ id: Schema.String, body: Schema.String })),
   transformArgs: Schema.Struct({
     foo: Schema.NumberFromString,
   }),
@@ -77,6 +78,7 @@ const mutatorSchema = ZfxMutators.schema({
   noTransaction: Schema.Void,
   doubleTransaction: Schema.Void,
   concurrentTransactions: Schema.Void,
+  rawInsertDuplicate: Schema.String,
 });
 
 const clientTransaction = ZfxClientTransaction.make("ClientTransaction", schema);
@@ -113,6 +115,11 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   },
   /** biome-ignore lint/correctness/noUnusedFunctionParameters: required for test */
   optionalVoidArg: Effect.fn(function* (a) {}),
+  nullableArg: Effect.fn(function* (msg) {
+    yield* clientTransaction.use(async (tx) => {
+      if (msg !== null) await tx.mutate.messages.insert(msg);
+    });
+  }),
   transformArgs: Effect.fn(function* (a) {
     return yield* transformArgsClient(a);
   }),
@@ -129,6 +136,9 @@ const clientMutators = ZfxMutators.make(mutatorSchema, {
   noTransaction: Effect.fn(function* () {}),
   doubleTransaction: Effect.fn(function* () {}),
   concurrentTransactions: Effect.fn(function* () {}),
+  rawInsertDuplicate: Effect.fn(function* (_id: string) {
+    yield* clientTransaction.use(async () => {});
+  }),
 });
 
 const serverMutators = ZfxMutators.make(mutatorSchema, {
@@ -142,6 +152,7 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
     }),
   },
   optionalVoidArg: Effect.fn(function* () {}),
+  nullableArg: (msg) => clientMutators.nullableArg(msg).pipe(serverTransaction.execute),
   transformArgs: Effect.fn(function* (a) {
     return yield* transformArgsServer(a).pipe(serverTransaction.execute);
   }),
@@ -208,6 +219,14 @@ const serverMutators = ZfxMutators.make(mutatorSchema, {
       ],
       { concurrency: "unbounded" },
     );
+  }),
+  // A plain Drizzle insert (no `ON CONFLICT`): since Zero 1.9, CRUD `insert` ignores primary-key collisions.
+  rawInsertDuplicate: Effect.fn(function* (id: string) {
+    yield* serverTransaction
+      .use(async (tx) => {
+        await tx.dbTransaction.wrappedTransaction.insert(messages).values({ id, body: "dup" });
+      })
+      .pipe(serverTransaction.execute);
   }),
 });
 
@@ -749,6 +768,24 @@ it.live(
 );
 
 it.live(
+  "nullable mutator arguments accept null",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    // `null` must reach a `Schema.NullOr` decoder as-is on both the client and the server.
+    const nullResult = z.mutate.nullableArg(null);
+    yield* Effect.promise(() => expect(nullResult.client).resolves.toEqual({ type: "success" }));
+    yield* Effect.promise(() => expect(nullResult.server).resolves.toEqual({ type: "success" }));
+
+    const id = nanoid();
+    const result = z.mutate.nullableArg({ id, body: "hello" });
+    yield* Effect.promise(() => expect(result.server).resolves.toEqual({ type: "success" }));
+    const rows = yield* Effect.promise(() => rawDb`select body from messages where id = ${id}`);
+    expect(rows).toEqual([{ body: "hello" }]);
+  }),
+);
+
+it.live(
   "concurrent transactions should be resolved",
   Effect.fn(function* () {
     const z = yield* initZero;
@@ -807,14 +844,14 @@ it.live(
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    // Seed a row directly so the server-side insert collides on the primary key. The client store has no
-    // such row, so the optimistic insert succeeds and the mutation is still pushed to the server.
+    // Seed a row directly so the server-side raw insert collides on the primary key. The client mutator
+    // doesn't write, so it succeeds and the mutation is still pushed to the server.
     const id = nanoid();
     yield* Effect.promise(() => rawDb`insert into messages (id, body) values (${id}, 'seed')`);
 
     // Our bridge converts the resulting DB error into a per-mutation app error; it never emits a top-level
     // PushFailed reason:"database" (only OutOfOrderMutation is passed through to upstream's top-level handler).
-    const result = yield* Effect.promise(() => z.mutate.messages.create({ id, body: "dup" }).server);
+    const result = yield* Effect.promise(() => z.mutate.rawInsertDuplicate(id).server);
     expect(result).toMatchObject({ type: "error", error: { type: "app" } });
   }),
 );

@@ -11,25 +11,26 @@
     "lint": "biome check --error-on-warnings",
     "lint:fix": "biome check --write --unsafe",
     "build": "bun scripts/build.ts",
-    "test": "bun vitest run src"
+    "test": "bun vitest run --dir src"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
     "@biomejs/biome": "^2.2.6",
-    "@effect/language-service": "^0.86.2",
-    "@effect/vitest": "^4.0.0-beta.78",
-    "@rocicorp/zero": "1.8.0",
+    "@effect/language-service": "^0.87.4",
+    "@effect/vitest": "^4.0.2",
+    "@rocicorp/zero": "1.10.0",
     "@types/bun": "latest",
     "@types/fs-extra": "^11.0.4",
-    "effect": "^4.0.0-beta.78",
+    "effect": "^4.0.2",
     "fast-glob": "^3.3.3",
     "fs-extra": "^11.3.2",
     "ts-patch": "^3.3.0",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "vitest": "^5.0.3"
   },
   "peerDependencies": {
-    "@rocicorp/zero": "*",
-    "effect": "^4.0.0-beta.78"
+    "@rocicorp/zero": ">=1.10.0",
+    "effect": "^4.0.0"
   },
   "patchedDependencies": {
     "typescript@5.9.2": "patches/typescript@5.9.2.patch"

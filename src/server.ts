@@ -22,7 +22,6 @@ import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
 import { TransactCallbackNotInvokedError, TransactInternalError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
-import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
@@ -91,16 +90,14 @@ export const handleMutate = Effect.fn(function* <
                       Effect.onExit((exit) => Deferred.done(exitDeferred, exit)),
                       Effect.catchCause((cause) => Effect.die(makeApplicationError(cause))),
                       Effect.asVoid,
-                      Effect.provide(innerCtx),
-                      (effect) => Effect.runPromise(effect, { signal }),
+                      (effect) => Effect.runPromiseWith(innerCtx)(effect, { signal }),
                     ),
                   ),
                 catch: (error) => new TransactInternalError({ cause: Cause.fail(error) }),
               }).pipe(Effect.flatMap((value) => Deferred.succeed(response, value)));
 
               return yield* Deferred.poll(exitDeferred).pipe(
-                Effect.flatMap(Effect.fromOption),
-                Effect.catchTag("NoSuchElementError", () => Effect.fail(new TransactCallbackNotInvokedError())),
+                Effect.flatMap(Effect.fromOption(() => new TransactCallbackNotInvokedError())),
                 Effect.flatten,
               );
             }, ServerSynchronizationContext.guard);
@@ -156,13 +153,12 @@ const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, m
         Match.orElse(() => Option.none()),
       ),
     ),
-    Effect.fromOption,
-    Effect.catchTag("NoSuchElementError", () => Effect.fail(new MutatorNotFoundError({ name: mutation.name }))),
+    Effect.fromOption(() => new MutatorNotFoundError({ name: mutation.name })),
   );
 
-  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(
-    normalizeArgs(mutation.args[0]),
-  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))));
+  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
+    Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
+  );
 
   return yield* mutator(args);
 });
@@ -204,8 +200,7 @@ export const handleQuery = Effect.fn(function* <E, R1, R2>({
       handleQueryRequest({
         handler: (name, args) =>
           Arr.findFirst(queries, (q) => q[QueryNameSymbol] === name).pipe(
-            Effect.fromOption,
-            Effect.catchTag("NoSuchElementError", () => Effect.fail(new QueryNotFound({ name }))),
+            Effect.fromOption(() => new QueryNotFound({ name })),
             Effect.flatMap((query) => query[RunQuerySymbol]({ _tag: "Encoded", args })),
             Effect.runSyncWith(ctx),
           ),

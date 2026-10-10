@@ -10,7 +10,6 @@ import * as Schema from "effect/Schema";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
 import { ContextSymbol, SchemaSymbol } from "./client-transaction.js";
-import { normalizeArgs } from "./internal/utils.js";
 import * as Mutators from "./mutators.js";
 
 type _NodeInspectSymbol = NodeInspectSymbol;
@@ -28,7 +27,7 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
 
   function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) =>
-      Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(normalizeArgs(args)).pipe(
+      Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
         Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction[ContextSymbol], tx),
@@ -74,6 +73,6 @@ export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError
 }> {
   override get message() {
     const error = Cause.squash(this.cause);
-    return Predicate.isError(error) ? error.message : "Internal error";
+    return Predicate.isError(error) && !Schema.isSchemaError(error) ? error.message : "Internal error";
   }
 }
