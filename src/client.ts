@@ -1,16 +1,15 @@
 import { Zero, type ZeroOptions, type Schema as ZeroSchema, type Transaction as ZeroTransaction } from "@rocicorp/zero";
+import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import type * as Schema from "effect/Schema";
-import type * as SchemaIssue from "effect/SchemaIssue";
+import * as Schema from "effect/Schema";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
 import { ContextSymbol, SchemaSymbol } from "./client-transaction.js";
-import { decodeArgs, inputValidationError } from "./internal/args.js";
 import * as Mutators from "./mutators.js";
 
 type _NodeInspectSymbol = NodeInspectSymbol;
@@ -26,29 +25,18 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
       Exclude<Mutators.ExtractMutatorsRequirements<TMutators>, (typeof transaction)[typeof ContextSymbol]["Identifier"]>
     >();
 
-  function unwrapMutator<E>(
-    name: string,
-    mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>,
-  ) {
+  function unwrapMutator<E>(mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>, E>) {
     return (tx: ZeroTransaction<TSchema>, args: unknown, _ctx: unknown) =>
-      decodeArgs(mutator[Mutators.MutatorSchemaSymbol], args).pipe(
-        Effect.mapError((e) => new ClientArgsParseError({ mutator: name, issue: e.issue })),
+      Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(args).pipe(
+        Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
         Effect.flatMap(mutator),
         Effect.provideService(transaction[ContextSymbol], tx),
         Effect.runPromiseWith(ctx),
       );
   }
 
-  // Mutators are named like upstream's `defineMutators` registry: "name" or "namespace.name".
-  const unwrappedMutators = Rec.map(mutators, (v, namespace) =>
-    Match.value(v).pipe(
-      Match.when(Predicate.isFunction, (mutator) => unwrapMutator(namespace, mutator)),
-      Match.orElse(
-        Rec.map((mutator: Mutators.AnyMutator<Mutators.ExtractMutatorsRequirements<TMutators>>, name) =>
-          unwrapMutator(`${namespace}.${name}`, mutator),
-        ),
-      ),
-    ),
+  const unwrappedMutators = Rec.map(mutators, (v) =>
+    Match.value(v).pipe(Match.when(Predicate.isFunction, unwrapMutator), Match.orElse(Rec.map(unwrapMutator))),
   ) as ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>["mutators"];
 
   return yield* Effect.acquireRelease(
@@ -80,18 +68,11 @@ type UnwrapMutators<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMu
       };
 } & {};
 
-/**
- * Mutator args failed to decode on the client. Zero surfaces it as the same app error a `defineMutator` validator
- * failure produces: `message` is "Validation failed for mutator <name>: <issues>", and `details` carries the issues.
- */
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
-  readonly mutator: string;
-  readonly issue: SchemaIssue.Issue;
+  readonly cause: Cause.Cause<unknown>;
 }> {
   override get message() {
-    return inputValidationError(this.mutator, this.issue).message;
-  }
-  get details() {
-    return inputValidationError(this.mutator, this.issue).details;
+    const error = Cause.squash(this.cause);
+    return Predicate.isError(error) && !Schema.isSchemaError(error) ? error.message : "Internal error";
   }
 }

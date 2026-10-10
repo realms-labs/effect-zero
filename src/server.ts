@@ -17,10 +17,9 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import type * as SchemaIssue from "effect/SchemaIssue";
+import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
-import { decodeArgs, inputValidationError } from "./internal/args.js";
 import { TransactCallbackNotInvokedError, TransactInternalError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import * as Mutators from "./mutators.js";
@@ -157,10 +156,8 @@ const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, m
     Effect.fromOption(() => new MutatorNotFoundError({ name: mutation.name })),
   );
 
-  // Named like upstream's `defineMutators` registry ("name" or "namespace.name"), whatever the wire separator.
-  const mutatorName = name === undefined ? namespace : `${namespace}.${name}`;
-  const args = yield* decodeArgs(mutator[Mutators.MutatorSchemaSymbol], mutation.args[0]).pipe(
-    Effect.mapError((e) => new ServerArgsParseError({ mutator: mutatorName, issue: e.issue })),
+  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
+    Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
   );
 
   return yield* mutator(args);
@@ -169,8 +166,7 @@ const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, m
 export const makeApplicationError = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
   const message = Predicate.isError(error) ? error.message : "Internal error";
-  const details = error instanceof ServerArgsParseError ? error.details : undefined;
-  return new ApplicationError(message, { cause: error, details });
+  return new ApplicationError(message, { cause: error });
 };
 
 class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
@@ -182,16 +178,8 @@ class MutatorNotFoundError extends Data.TaggedError("MutatorNotFoundError")<{
 }
 
 class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
-  readonly mutator: string;
-  readonly issue: SchemaIssue.Issue;
-}> {
-  override get message() {
-    return inputValidationError(this.mutator, this.issue).message;
-  }
-  get details() {
-    return inputValidationError(this.mutator, this.issue).details;
-  }
-}
+  readonly cause: Cause.Cause<unknown>;
+}> {}
 
 class HandleMutateError extends Data.TaggedError("HandleMutateError")<{ readonly cause: Cause.Cause<unknown> }> {}
 
