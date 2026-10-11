@@ -6,7 +6,6 @@ import {
   Zero,
   type ZeroOptions,
 } from "@rocicorp/zero";
-import type * as Cause from "effect/Cause";
 import type * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -17,12 +16,10 @@ import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import type * as Tracer from "effect/Tracer";
 import type * as Unify from "effect/Unify";
 import { type ContextSymbol, SchemaSymbol } from "./client-transaction.js";
-import { type Envelope, pendingWrites } from "./internal/mutation.js";
 import * as Mutator from "./mutator.js";
 
 export { ClientArgsParseError } from "./mutator.js";
@@ -79,22 +76,22 @@ const makeLogSink = (context: Context.Context<never>): LogSink => ({
 const logLevels = { debug: "Debug", info: "Info", warn: "Warn", error: "Error" } as const;
 
 /** A mutation sent with {@link mutate}. Its client and server outcomes settle independently. */
-export interface Mutation<E> {
+export interface Mutation {
   /** Completes once the mutation is applied locally; fails if Zero or the client mutator rejected it. */
-  readonly client: Effect.Effect<void, MutationError | Mutator.ClientArgsParseError | E>;
+  readonly client: Effect.Effect<void, MutationError>;
   /** Completes once the server applied the mutation; fails if it was rejected anywhere. */
   readonly server: Effect.Effect<void, MutationError>;
 }
 
 /**
- * Sends a mutation, like `zero.mutate(request)`, and traces it. Awaiting `client` or `server` is optional; both
+ * Sends a mutation with `zero.mutate(request)` and traces it. Awaiting `client` or `server` is optional; both
  * outcomes are always recorded on the `zero.mutation` span, as the `zero.mutation.client` and
  * `zero.mutation.server` child spans.
  */
-export const mutate = Effect.fn(function* <Type, E>(
+export const mutate = Effect.fn(function* <Type>(
   // biome-ignore lint/suspicious/noExplicitAny: any Zero instance made with `make`
   zero: Zero<any, any, any>,
-  request: Mutator.MutateRequest<Type, E>,
+  request: Mutator.MutateRequest<Type>,
 ) {
   const mutator = request.mutator.mutatorName;
   const connection = zero.connection.state.current;
@@ -113,27 +110,12 @@ export const mutate = Effect.fn(function* <Type, E>(
     },
   }).pipe(Scope.provide(scope));
 
-  const clientFailure = yield* Ref.make(Option.none<Cause.Cause<unknown>>());
-  const envelope: typeof Envelope.Encoded = {
-    ...request.args,
-    span: { traceId: span.traceId, spanId: span.spanId, sampled: span.sampled },
-  };
-  pendingWrites.set(envelope, { span, clientFailure });
-  const result = yield* Effect.sync(() => zero.mutate({ ...request, args: envelope })).pipe(
+  const result = yield* Effect.sync(() => zero.mutate(request)).pipe(
     Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
   );
 
   const client = yield* Effect.promise(() => result.client).pipe(
-    Effect.filterOrElse(
-      isApplied,
-      Effect.fnUntraced(function* (details) {
-        return yield* Option.match(yield* Ref.get(clientFailure), {
-          onNone: () => Effect.fail(new MutationError({ mutator, origin: "client", ...details.error })),
-          // The client mutator's own (typed) failure.
-          onSome: (cause) => Effect.failCause(cause as Cause.Cause<Mutator.ClientArgsParseError | E>),
-        });
-      }),
-    ),
+    Effect.filterOrElse(isApplied, (details) => new MutationError({ mutator, origin: "client", ...details.error })),
     Effect.asVoid,
     traceOutcome({ origin: "client", parent: span, mutator }),
     Effect.forkDetach,
@@ -142,8 +124,8 @@ export const mutate = Effect.fn(function* <Type, E>(
     Effect.filterOrElse(
       isApplied,
       Effect.fnUntraced(function* (details) {
-        // A client failure is reported for the server too: the write was never pushed.
-        const origin = Option.isSome(yield* Ref.get(clientFailure)) ? "client" : "server";
+        // A write the client rejected is never pushed; Zero reports the client's error for the server too.
+        const origin = Exit.isFailure(yield* Fiber.await(client)) ? "client" : "server";
         return yield* new MutationError({ mutator, origin, ...details.error });
       }),
     ),

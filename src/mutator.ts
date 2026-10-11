@@ -9,16 +9,12 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Tracer from "effect/Tracer";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
 import { ContextSymbol } from "./client-transaction.js";
-import { Envelope, pendingWrites } from "./internal/mutation.js";
 import { prefixId } from "./internal/utils.js";
 
 type _NodeInspectSymbol = NodeInspectSymbol;
@@ -46,7 +42,7 @@ export type Definitions = { readonly [key: string]: AnyDefinition | Definitions 
  * for Zero's own `zero.mutate(request)`. It is also a Zero `Mutator`, so the registry can be passed to Zero.
  */
 export interface Mutator<Type, Encoded, E, R> extends Definition<Type, Encoded, E, R> {
-  (args: Type): MutateRequest<Type, E>;
+  (args: Type): MutateRequest<Type>;
   readonly mutatorName: string;
   /** Runs the mutator for Zero, which calls it with the transaction and the `context` from `ZfxClient.make`. */
   readonly fn: (options: {
@@ -60,11 +56,11 @@ export interface Mutator<Type, Encoded, E, R> extends Definition<Type, Encoded, 
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
 export type AnyMutator = Mutator<any, any, any, any>;
 
-/** A request to run a mutator, which `ZfxClient.mutate` runs. `E` is the client mutator's failure. */
+/** A request to run a mutator, for `ZfxClient.mutate` or Zero's own `zero.mutate`. */
 // biome-ignore lint/suspicious/noExplicitAny: compatible with any Zero instance's `zero.mutate`
-export type MutateRequest<Type, E> = ZeroMutateRequest<any, any, any, any> & {
-  // biome-ignore lint/suspicious/noExplicitAny: the encoded args and services don't matter to the caller
-  readonly mutator: Mutator<Type, any, E, any>;
+export type MutateRequest<Type> = ZeroMutateRequest<any, any, any, any> & {
+  // biome-ignore lint/suspicious/noExplicitAny: the encoded args, errors and services don't matter to the caller
+  readonly mutator: Mutator<Type, any, any, any>;
 };
 
 type Tree<D> = {
@@ -136,49 +132,26 @@ const makeMutator = <Type, Encoded, E, R>(
   name: string,
   definition: Definition<Type, Encoded, E, R>,
 ): Mutator<Type, Encoded, E, R> => {
-  const run = Effect.fnUntraced(
-    function* (args: unknown, tx: ZeroTransaction<ZeroSchema>) {
-      const envelope = yield* Schema.decodeUnknownEffect(Envelope)(args).pipe(
-        Effect.catchTag("SchemaError", (error) => new ClientArgsParseError({ cause: Cause.fail(error) })),
-      );
-      yield* Schema.decodeUnknownEffect(definition.payload)(envelope.args).pipe(
-        Effect.catchTag("SchemaError", (error) => new ClientArgsParseError({ cause: Cause.fail(error) })),
-        Effect.flatMap(definition.mutator),
-        Effect.withSpan("zero.mutator", {
-          parent: envelope.span.pipe(Option.map(Tracer.externalSpan), Option.getOrUndefined),
-          attributes: {
-            "zero.mutator": name,
-            "zero.clientID": tx.clientID,
-            "zero.mutationID": tx.mutationID,
-            "zero.mutation.reason": tx.reason,
-          },
-        }),
-      );
-    },
-    (effect, args, tx) =>
-      effect.pipe(
-        // Only the optimistic run answers `ZfxClient.mutate`; rebases re-run the same write later.
-        Effect.tapCause((cause) =>
-          Option.liftPredicate(args, Predicate.isObject).pipe(
-            Option.filter(() => tx.reason === "optimistic"),
-            Option.flatMapNullishOr((envelope) => pendingWrites.get(envelope)),
-            Option.match({
-              onNone: () => Effect.void,
-              onSome: (write) => Ref.set(write.clientFailure, Option.some(cause)),
-            }),
-          ),
-        ),
-        Effect.provideService(transaction[ContextSymbol], tx),
-      ),
-  );
+  const run = (args: unknown, tx: ZeroTransaction<ZeroSchema>) =>
+    Schema.decodeUnknownEffect(definition.payload)(args).pipe(
+      Effect.catchTag("SchemaError", (error) => new ClientArgsParseError({ cause: Cause.fail(error) })),
+      Effect.flatMap(definition.mutator),
+      Effect.withSpan("zero.mutator", {
+        attributes: {
+          "zero.mutator": name,
+          "zero.clientID": tx.clientID,
+          "zero.mutationID": tx.mutationID,
+          "zero.mutation.reason": tx.reason,
+        },
+      }),
+      Effect.provideService(transaction[ContextSymbol], tx),
+      Effect.asVoid,
+    );
 
   const mutator: Mutator<Type, Encoded, E, R> = Object.assign(
     (args: Type) =>
       // A Zero `MutateRequest`, whose brand only exists at the type level.
-      ({ mutator, args: { args: Schema.encodeSync(definition.payload)(args) }, "~": "MutateRequest" }) as MutateRequest<
-        Type,
-        E
-      >,
+      ({ mutator, args: Schema.encodeSync(definition.payload)(args), "~": "MutateRequest" }) as MutateRequest<Type>,
     {
       ...definition,
       mutatorName: name,

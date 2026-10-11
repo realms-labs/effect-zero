@@ -16,9 +16,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import * as Tracer from "effect/Tracer";
 import type * as Unify from "effect/Unify";
-import { Envelope } from "./internal/mutation.js";
 import { TransactCallbackNotInvokedError, TransactInternalError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import * as Mutator from "./mutator.js";
@@ -77,9 +75,6 @@ export const handleMutate = Effect.fn(function* <
         dbProvider: transaction[DatabaseSymbol],
         handler: (transact_, mutation) =>
           Effect.gen(function* () {
-            const envelope = yield* Schema.decodeUnknownEffect(Envelope)(mutation.args[0]).pipe(
-              Effect.catchTag("SchemaError", (error) => new ServerArgsParseError({ cause: Cause.fail(error) })),
-            );
             const response = yield* Deferred.make<Awaited<ReturnType<typeof transact_>>>();
 
             const transact = Effect.fn(function* <A, E, R>(
@@ -111,7 +106,7 @@ export const handleMutate = Effect.fn(function* <
               mutators,
               transaction,
               mutation.name,
-              envelope.args,
+              mutation.args[0],
             ).pipe(
               ServerSynchronizationContext.finalize,
               Effect.provide([
@@ -124,11 +119,6 @@ export const handleMutate = Effect.fn(function* <
                   "zero.clientID": mutation.clientID,
                   "zero.mutationID": mutation.id,
                 },
-                // A link, not the parent: the push request has its own trace, and a write can be pushed more than once.
-                links: envelope.span.pipe(
-                  Option.map((span) => ({ span: Tracer.externalSpan(span), attributes: {} })),
-                  Option.toArray,
-                ),
               }),
               Effect.exit,
             );
@@ -178,14 +168,15 @@ const runMutation = Effect.fnUntraced(function* <TSchema extends ZeroSchema, TTr
 });
 
 /**
- * Finds a mutator by its dotted name, with its server override if it has one. Their services aren't tracked from
- * here on: `handleMutate` already requires every implementation's.
+ * Finds a mutator by its name, with its server override if it has one. Like upstream, names are split on "." or "|"
+ * (the separator of Zero's legacy custom mutators). Their services aren't tracked from here on: `handleMutate`
+ * already requires every implementation's.
  */
 const lookup = (mutators: Mutator.AnyRegistry | Mutator.AnyServerMutators, name: string) => {
   const [registry, overrides] =
     Mutator.ServerMutatorsTypeId in mutators ? [mutators.registry, mutators.overrides] : [mutators, undefined];
   const at = (root: unknown) =>
-    Arr.reduce(Str.split(name, "."), Option.some(root), (node, key) =>
+    Arr.reduce(Str.split(name, /[.|]/), Option.some(root), (node, key) =>
       node.pipe(
         Option.filter(Predicate.hasProperty(key)),
         Option.map((value) => value[key]),

@@ -133,7 +133,7 @@ const mutators = ZfxMutator.registry(clientTransaction, {
       throw new Error("client error");
     }),
   }),
-  clientFailsTyped: ZfxMutator.make({
+  clientYieldsError: ZfxMutator.make({
     payload: Schema.Void,
     mutator: Effect.fn(function* () {
       return yield* new Unauthorized();
@@ -480,7 +480,7 @@ it.live(
     // Args that reach the client mutator malformed (here, a hand-made request) fail its decoding. That surfaces
     // as a `ClientArgsParseError` app error, whose `message` getter masks the schema detail.
     const request = mutators.messages.create({ id: nanoid(), body: "valid" });
-    const result = yield* Effect.promise(() => z.mutate({ ...request, args: { args: {} } }).client);
+    const result = yield* Effect.promise(() => z.mutate({ ...request, args: {} }).client);
     expect(result).toMatchObject({ type: "error", error: { type: "app", message: "Internal error" } });
     expect(JSON.stringify(result)).not.toContain("Parsed message");
   }),
@@ -789,21 +789,27 @@ it.live(
 );
 
 it.live(
-  "ZfxClient.mutate fails the client outcome with the client mutator's typed error",
+  "ZfxClient.mutate fails both outcomes with Zero's error when the client mutator fails",
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    const mutation = yield* ZfxClient.mutate(z, mutators.clientFailsTyped());
+    const mutation = yield* ZfxClient.mutate(z, mutators.clientYieldsError());
 
     const clientError = yield* Effect.flip(mutation.client);
-    expectTypeOf(clientError).toEqualTypeOf<ZfxClient.MutationError | ZfxClient.ClientArgsParseError | Unauthorized>();
-    expect(clientError).toBeInstanceOf(Unauthorized);
+    // As in Zero, the client mutator's error survives as its name in the details.
+    expect(clientError).toMatchObject({
+      _tag: "MutationError",
+      mutator: "clientYieldsError",
+      origin: "client",
+      type: "app",
+      details: { name: "Unauthorized" },
+    });
 
     // The mutation was never pushed, so the server outcome reports the client's failure.
     const serverError = yield* Effect.flip(mutation.server);
     expect(serverError).toMatchObject({
       _tag: "MutationError",
-      mutator: "clientFailsTyped",
+      mutator: "clientYieldsError",
       origin: "client",
       type: "app",
     });
@@ -830,7 +836,7 @@ it.live(
 );
 
 it.live(
-  "mutations are traced on the client and linked from the server",
+  "mutations are traced on the client and the server",
   Effect.fn(function* () {
     const z = yield* initZero;
     const before = recordedSpans.length;
@@ -854,23 +860,18 @@ it.live(
     });
     expect(parent.status._tag).toBe("Ended");
     if (parent.status._tag === "Ended") expect(Exit.isSuccess(parent.status.exit)).toBe(true);
-
-    // The client mutator's run is a child of the write, through the span context the write sends.
-    const isChildOfParent = (span: Tracer.NativeSpan) =>
-      Option.match(span.parent, { onNone: () => false, onSome: (p) => p.spanId === parent.spanId });
-    const children = spans.filter(isChildOfParent);
-    expect(children.map((span) => span.name)).toEqual(
-      expect.arrayContaining(["zero.mutator", "zero.mutation.client", "zero.mutation.server"]),
+    expect(spans.filter((span) => Option.getOrUndefined(span.parent) === parent).map((span) => span.name)).toEqual(
+      expect.arrayContaining(["zero.mutation.client", "zero.mutation.server"]),
     );
-    const body = children.find((span) => span.name === "zero.mutator")!;
-    expect(Object.fromEntries(body.attributes)).toMatchObject({
-      "zero.mutator": "messages.create",
-      "zero.clientID": z.clientID,
-      "zero.mutationID": expect.any(Number),
-      "zero.mutation.reason": "optimistic",
-    });
 
-    // The server's span for the same write (Zero's client and mutation IDs) links back to the client's span.
+    // The client mutator's run and the server's handling of the same write share Zero's client and mutation IDs.
+    const body = spans.find(
+      (span) =>
+        span.name === "zero.mutator" &&
+        span.attributes.get("zero.clientID") === z.clientID &&
+        span.attributes.get("zero.mutation.reason") === "optimistic",
+    )!;
+    expect(body.attributes.get("zero.mutator")).toBe("messages.create");
     const handle = spans.find(
       (span) =>
         span.name === "zero.mutation.handle" &&
@@ -878,10 +879,37 @@ it.live(
         span.attributes.get("zero.mutationID") === body.attributes.get("zero.mutationID"),
     )!;
     expect(handle.attributes.get("zero.mutator")).toBe("messages.create");
-    expect(handle.links.map((link) => [link.span.traceId, link.span.spanId])).toEqual([
-      [parent.traceId, parent.spanId],
-    ]);
   }, Effect.withTracer(recordingTracer)),
+);
+
+it.live(
+  "the server still runs mutations named the legacy way",
+  Effect.fn(function* () {
+    // Zero's legacy custom mutators are named "namespace|name", like upstream's server accepts.
+    const clientID = nanoid();
+    const item: Message = { id: nanoid(), body: "legacy" };
+    const result = yield* ZfxServer.handleMutate({
+      transaction: serverTransaction,
+      mutators: serverMutators,
+      query: { schema: "zero_0", appID: "zero" },
+      body: {
+        clientGroupID: nanoid(),
+        mutations: [{ type: "custom", id: 1, clientID, name: "messages|create", args: [item], timestamp: Date.now() }],
+        pushVersion: 1,
+        timestamp: Date.now(),
+        requestID: nanoid(),
+      },
+      userId: undefined,
+    });
+
+    expect(result).toEqual({
+      kind: "MutateResponse",
+      userID: null,
+      mutations: [{ id: { clientID, id: 1 }, result: {} }],
+    });
+    const rows = yield* Effect.promise(() => rawDb`select body from messages where id = ${item.id}`);
+    expect(rows).toEqual([{ body: "legacy" }]);
+  }),
 );
 
 it.live(

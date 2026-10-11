@@ -151,14 +151,15 @@ const program = Effect.gen(function* () {
   const mutation = yield* ZfxClient.mutate(zero, mutators.todo.create({ id: "1", title: "Write docs" }));
 
   // The client and server outcomes settle independently; await either, both, or neither.
-  yield* mutation.client; // applied locally; fails with `MutationError` or the client mutator's own error
+  yield* mutation.client; // applied locally; fails with `MutationError`
   yield* mutation.server; // applied by the server; fails with `MutationError`
 });
 ```
 
-`ZfxClient.mutate` sends the mutation as soon as it runs. A rejected mutation (Zero offline, or a mutator failing)
-fails `client` or `server` with a `MutationError` carrying Zero's error (`type: "zero" | "app"`, `message`, `details`)
-and its `origin` (`"client" | "server"`), and a client mutator's typed failure comes back as itself.
+`ZfxClient.mutate` sends the mutation with `zero.mutate(request)` as soon as it runs, with the same args Zero would
+send. A rejected mutation (Zero offline, or a mutator failing) fails `client` or `server` with a `MutationError`
+carrying Zero's error (`type: "zero" | "app"`, `message`, `details`) and its `origin` (`"client" | "server"`). As in
+Zero, a mutator's error survives as its name in `details`.
 
 Each mutation is traced:
 - **`zero.mutation`** (with `zero.mutator`, `zero.clientID`, `zero.clientGroupID` and the connection state) spans the
@@ -166,14 +167,11 @@ Each mutation is traced:
   recorded whether or not you await them.
 - **`zero.mutator`** spans each run of the mutator's body on the client, with `zero.clientID`, Zero's `zero.mutationID`
   and `zero.mutation.reason` (`optimistic` or `rebase`).
-- **`zero.mutation.handle`** spans each mutation on the server (with the same `zero.clientID` and `zero.mutationID`),
-  with a link to the client's `zero.mutation` span.
+- **`zero.mutation.handle`** spans each mutation on the server, with the same `zero.clientID` and `zero.mutationID`, so
+  the client's runs and the server's handling of a write can be joined on them.
 
 Zero's own `zero.mutate(request)` also works with these requests, but isn't traced and resolves Zero's result details
 instead of failing.
-
-> [!NOTE]
-> A mutation's args go over the wire as `{ args, span }`, so deploy the server before clients that use this version.
 
 ## Synced queries
 

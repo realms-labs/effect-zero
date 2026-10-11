@@ -90,13 +90,11 @@ describe("Type tests", () => {
       expectTypeOf(mutators.messages.create.mutatorName).toEqualTypeOf<string>();
     });
 
-    it("mutate's client outcome carries the client mutator's error", () => {
+    it("mutate's outcomes fail with Zero's error details", () => {
       const mutation = Client.mutate({} as any, mutators.transformArgs({ at: new Date() }));
-      type Mutation = Effect.Success<typeof mutation>;
-      expectTypeOf<Effect.Error<Mutation["client"]>>().toEqualTypeOf<
-        Client.MutationError | Client.ClientArgsParseError | DummyError
-      >();
-      expectTypeOf<Effect.Error<Mutation["server"]>>().toEqualTypeOf<Client.MutationError>();
+      expectTypeOf<Effect.Success<typeof mutation>>().toExtend<Client.Mutation>();
+      expectTypeOf<Effect.Error<Client.Mutation["client"]>>().toEqualTypeOf<Client.MutationError>();
+      expectTypeOf<Effect.Error<Client.Mutation["server"]>>().toEqualTypeOf<Client.MutationError>();
       expectTypeOf<Effect.Services<typeof mutation>>().toEqualTypeOf<never>();
     });
 
