@@ -82,6 +82,8 @@ describe("Type tests", () => {
       // A mutator without args is called without args.
       mutators.messages.deleteAll();
       expectTypeOf<Parameters<typeof mutators.transformArgs>>().toEqualTypeOf<[{ readonly at: Date }]>();
+      const nullable = Mutator.make({ payload: Schema.NullOr(Schema.String), mutator: () => Effect.void });
+      expectTypeOf<Parameters<typeof nullable.mutator>>().toEqualTypeOf<[string | null]>();
 
       // A request is also a Zero `MutateRequest`, so `zero.mutate(request)` accepts it.
       expectTypeOf(mutators.messages.create({ id: "1", body: "a" })).toExtend<ZeroMutateRequest<any, any, any, any>>();

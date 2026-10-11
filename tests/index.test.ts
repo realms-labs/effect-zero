@@ -20,7 +20,6 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import {
   Chunk,
   Console,
-  Context,
   Data,
   Duration,
   Effect,
@@ -407,60 +406,6 @@ test("server is running", async () => {
   await expect(response.text()).resolves.toEqual("OK");
 });
 
-test("handleMutate has no extra requirements", () => {
-  const effect = ZfxServer.handleMutate({
-    transaction: serverTransaction,
-    mutators: serverMutators,
-    query: {} as any,
-    body: {} as any,
-    userId: undefined,
-  });
-
-  expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
-});
-
-test("mutators take their decoded args", () => {
-  expectTypeOf<Parameters<typeof mutators.messages.create>>().toEqualTypeOf<
-    [{ readonly id: string; readonly body: string }]
-  >();
-  expectTypeOf<Parameters<typeof mutators.transformArgs>>().toEqualTypeOf<[{ readonly foo: number }]>();
-  expectTypeOf<Parameters<typeof mutators.nullableArg>>().toEqualTypeOf<
-    [{ readonly id: string; readonly body: string } | null]
-  >();
-});
-
-test("mutator requirements should propagate", () => {
-  class DummyTag extends Context.Service<DummyTag, {}>()("effect-zero/DummyTag") {}
-
-  class DummyTag2 extends Context.Service<DummyTag2, {}>()("effect-zero/DummyTag2") {}
-
-  const clientTransaction = ZfxClientTransaction.make("DummyClientTransaction", schema);
-  const serverTransaction = ZfxServerTransaction.make("DummyServerTransaction", database, clientTransaction);
-  const mutators = ZfxMutator.registry(clientTransaction, {
-    dummy: ZfxMutator.make({
-      payload: Schema.Void,
-      mutator: Effect.fn(function* () {
-        yield* DummyTag;
-      }),
-    }),
-    dummy2: ZfxMutator.make({
-      payload: Schema.Void,
-      mutator: Effect.fn(function* () {
-        yield* DummyTag2;
-      }),
-    }),
-  });
-  const serverEffect = ZfxServer.handleMutate({
-    transaction: serverTransaction,
-    mutators,
-    query: {} as any,
-    body: {} as any,
-    userId: undefined,
-  });
-
-  expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
-});
-
 it.live(
   "rows are returned after data is inserted",
   Effect.fn(function* () {
@@ -505,47 +450,21 @@ it.live(
 );
 
 it.live(
-  "custom mutators work",
+  "mutators create and update rows",
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    const item: Message = { id: nanoid(), body: "Hello, world!" };
-    const mut = z.mutate(mutators.messages.create(item));
+    const item: Message = { id: nanoid(), body: "Original body" };
+    const create = z.mutate(mutators.messages.create(item));
+    expect(yield* Effect.promise(() => create.client)).toEqual({ type: "success" });
+    expect(yield* Effect.promise(() => create.server)).toEqual({ type: "success" });
 
-    const clientResult = yield* Effect.promise(() => mut.client);
-    expect(clientResult).toEqual({ type: "success" });
-
-    const serverResult = yield* Effect.promise(() => mut.server);
-    expect(serverResult).toEqual({ type: "success" });
+    const updatedItem: Message = { id: item.id, body: "Updated body" };
+    expect(yield* Effect.promise(() => z.mutate(mutators.messages.updateMessage(updatedItem)).server)).toEqual({
+      type: "success",
+    });
 
     const result = yield* Effect.promise(() => ddb.select({ id: messages.id, body: messages.body }).from(messages));
-    expect(result).toEqual([item]);
-  }),
-);
-
-it.live(
-  "nested mutators using Effect.fn work",
-  Effect.fn(function* () {
-    const z = yield* initZero;
-
-    // First create a message
-    const item: Message = { id: nanoid(), body: "Original body" };
-    yield* Effect.promise(() => z.mutate(mutators.messages.create(item)).server);
-
-    // Update it using the nested Effect.fn mutator
-    const updatedItem: Message = { id: item.id, body: "Updated body" };
-    const updateMut = z.mutate(mutators.messages.updateMessage(updatedItem));
-
-    const updateClientResult = yield* Effect.promise(() => updateMut.client);
-    expect(updateClientResult).toEqual({ type: "success" });
-
-    const updateServerResult = yield* Effect.promise(() => updateMut.server);
-    expect(updateServerResult).toEqual({ type: "success" });
-
-    // Verify the update
-    const result = yield* Effect.promise(() =>
-      ddb.select({ id: messages.id, body: messages.body }).from(messages).where(eq(messages.id, item.id)),
-    );
     expect(result).toEqual([updatedItem]);
   }),
 );
@@ -936,7 +855,10 @@ it.live(
     expect(parent.status._tag).toBe("Ended");
     if (parent.status._tag === "Ended") expect(Exit.isSuccess(parent.status.exit)).toBe(true);
 
-    const children = spans.filter((span) => Option.getOrUndefined(span.parent) === parent);
+    // The client mutator's run is a child of the write, through the traceparent the write sends.
+    const isChildOfParent = (span: Tracer.NativeSpan) =>
+      Option.match(span.parent, { onNone: () => false, onSome: (p) => p.spanId === parent.spanId });
+    const children = spans.filter(isChildOfParent);
     expect(children.map((span) => span.name)).toEqual(
       expect.arrayContaining(["zero.mutator", "zero.mutation.client", "zero.mutation.server"]),
     );
@@ -946,51 +868,19 @@ it.live(
       "zero.mutation.reason": "optimistic",
     });
 
-    // The server's span for the same write links back to the client's span.
+    // The server's span for the same write (Zero's client and mutation IDs) links back to the client's span.
+    expect(parent.attributes.get("zero.mutationID")).toEqual(expect.any(Number));
     const handle = spans.find(
       (span) =>
         span.name === "zero.mutation.handle" &&
-        span.attributes.get("zero.mutation.id") === parent.attributes.get("zero.mutation.id"),
+        span.attributes.get("zero.clientID") === z.clientID &&
+        span.attributes.get("zero.mutationID") === parent.attributes.get("zero.mutationID"),
     )!;
-    expect(Object.fromEntries(handle.attributes)).toMatchObject({
-      "zero.mutator": "messages.create",
-      "zero.clientID": z.clientID,
-    });
+    expect(handle.attributes.get("zero.mutator")).toBe("messages.create");
     expect(handle.links.map((link) => [link.span.traceId, link.span.spanId])).toEqual([
       [parent.traceId, parent.spanId],
     ]);
   }, Effect.withTracer(recordingTracer)),
-);
-
-it.live(
-  "the server still runs mutations named the legacy way",
-  Effect.fn(function* () {
-    // Clients of effect-zero < 0.9 named mutators "namespace|name" and sent their args without an envelope.
-    // Such a client's pending mutations can still be pushed after an upgrade.
-    const clientID = nanoid();
-    const item: Message = { id: nanoid(), body: "legacy" };
-    const result = yield* ZfxServer.handleMutate({
-      transaction: serverTransaction,
-      mutators: serverMutators,
-      query: { schema: "zero_0", appID: "zero" },
-      body: {
-        clientGroupID: nanoid(),
-        mutations: [{ type: "custom", id: 1, clientID, name: "messages|create", args: [item], timestamp: Date.now() }],
-        pushVersion: 1,
-        timestamp: Date.now(),
-        requestID: nanoid(),
-      },
-      userId: undefined,
-    });
-
-    expect(result).toEqual({
-      kind: "MutateResponse",
-      userID: null,
-      mutations: [{ id: { clientID, id: 1 }, result: {} }],
-    });
-    const rows = yield* Effect.promise(() => rawDb`select body from messages where id = ${item.id}`);
-    expect(rows).toEqual([{ body: "legacy" }]);
-  }),
 );
 
 it.live(

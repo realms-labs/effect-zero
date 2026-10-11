@@ -4,6 +4,7 @@ import type {
   Transaction as ZeroTransaction,
 } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
@@ -12,24 +13,21 @@ import * as Schema from "effect/Schema";
 import type * as Unify from "effect/Unify";
 import type * as ClientTransaction from "./client-transaction.js";
 import { ContextSymbol } from "./client-transaction.js";
-import { ClientStateSymbol, unwrapEnvelope, type ZeroContext } from "./internal/mutation.js";
+import { fromTraceparent, pendingWrites, unwrapEnvelope } from "./internal/mutation.js";
 import { prefixId } from "./internal/utils.js";
 
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
-export const DefinitionTypeId = Symbol.for(prefixId("MutatorDefinition"));
-export const MutatorTypeId = Symbol.for(prefixId("Mutator"));
 export const RegistryTypeId = Symbol.for(prefixId("MutatorRegistry"));
-export const MutateRequestTypeId = Symbol.for(prefixId("MutateRequest"));
 export const ServerMutatorsTypeId = Symbol.for(prefixId("ServerMutators"));
+const DefinitionTypeId = Symbol.for(prefixId("MutatorDefinition"));
 
 /**
  * A mutator that isn't part of a registry yet, made with {@link make}. Like `defineMutator`, it gets its name
  * from its path in the {@link registry}.
  */
 export interface Definition<Type, Encoded, E, R> {
-  readonly [DefinitionTypeId]: typeof DefinitionTypeId;
   // biome-ignore lint/suspicious/noExplicitAny: decoding services are tracked in `R`
   readonly payload: Schema.Codec<Type, Encoded, any>;
   readonly mutator: (args: Type) => Effect.Effect<unknown, E, R>;
@@ -46,7 +44,6 @@ export type Definitions = { readonly [key: string]: AnyDefinition | Definitions 
  */
 export interface Mutator<Type, Encoded, E, R> {
   (args: Type): MutateRequest<Type, E>;
-  readonly [MutatorTypeId]: typeof MutatorTypeId;
   readonly mutatorName: string;
   // biome-ignore lint/suspicious/noExplicitAny: decoding services are tracked in `R`
   readonly payload: Schema.Codec<Type, Encoded, any>;
@@ -67,9 +64,10 @@ export type AnyMutator = Mutator<any, any, any, any>;
 
 /** A request to run a mutator, which `ZfxClient.mutate` runs. `E` is the client mutator's failure. */
 // biome-ignore lint/suspicious/noExplicitAny: compatible with any Zero instance's `zero.mutate`
-export interface MutateRequest<Type, E> extends ZeroMutateRequest<any, any, any, any> {
-  readonly [MutateRequestTypeId]: { readonly _Type: (_: Type) => void; readonly _E: () => E };
-}
+export type MutateRequest<Type, E> = ZeroMutateRequest<any, any, any, any> & {
+  // biome-ignore lint/suspicious/noExplicitAny: the encoded args and services don't matter to the caller
+  readonly mutator: Mutator<Type, any, E, any>;
+};
 
 type Tree<D> = {
   readonly [K in keyof D]: D[K] extends Definition<infer Type, infer Encoded, infer E, infer R>
@@ -92,10 +90,9 @@ type AnyClientTransaction = ClientTransaction.Context<any>;
 type Keys<T> = Exclude<Extract<keyof T, string>, "~">;
 
 /** The services a registry's mutators require. */
-export type Requirements<T> = T extends AnyMutator
-  ? T extends Mutator<infer _Type, infer _Encoded, infer _E, infer R>
-    ? R
-    : never
+// biome-ignore lint/suspicious/noExplicitAny: matches any mutator
+export type Requirements<T> = T extends Mutator<any, any, any, infer R>
+  ? R
   : { [K in Keys<T>]: Requirements<T[K]> }[Keys<T>];
 
 /** The client transaction a registry's mutators run in. */
@@ -111,15 +108,11 @@ export type ZeroSchemaOf<T extends AnyRegistry> = Transaction<T> extends ClientT
 export const make = <Type, Encoded, RD = never, A = unknown, E = never, R = never>(options: {
   readonly payload: Schema.Codec<Type, Encoded, RD, never>;
   readonly mutator: (args: NoInfer<Type>) => Effect.Effect<A, E, R>;
-}): Definition<Type, Encoded, E, R | RD> => ({
-  [DefinitionTypeId]: DefinitionTypeId,
-  payload: options.payload,
-  mutator: options.mutator,
-});
+}): Definition<Type, Encoded, E, R | RD> =>
+  // The id tells definitions apart from the namespaces around them in a registry.
+  ({ [DefinitionTypeId]: DefinitionTypeId, ...options }) as Definition<Type, Encoded, E, R | RD>;
 
-export const isDefinition = (u: unknown): u is AnyDefinition => Predicate.hasProperty(u, DefinitionTypeId);
-
-export const isMutator = (u: unknown): u is AnyMutator => Predicate.hasProperty(u, MutatorTypeId);
+const isDefinition = (u: unknown): u is AnyDefinition => Predicate.hasProperty(u, DefinitionTypeId);
 
 /**
  * Registers mutators under their path, like Zero's `defineMutators`: `{ todo: { create } }` registers
@@ -151,10 +144,8 @@ const makeMutator = (name: string, definition: AnyDefinition, transaction: AnyCl
 
   const mutator: AnyMutator = Object.assign(
     // biome-ignore lint/suspicious/noExplicitAny: typed through `Mutator`
-    (args: any) =>
-      ({ mutator, args: { args: encode(args) }, "~": "MutateRequest" }) as unknown as MutateRequest<unknown, unknown>,
+    (args: any) => ({ mutator, args: { args: encode(args) }, "~": "MutateRequest" }) as MutateRequest<unknown, unknown>,
     {
-      [MutatorTypeId]: MutatorTypeId as typeof MutatorTypeId,
       mutatorName: name,
       payload: definition.payload,
       mutator: definition.mutator,
@@ -168,32 +159,31 @@ const makeMutator = (name: string, definition: AnyDefinition, transaction: AnyCl
         readonly ctx: unknown;
         readonly tx: ZeroTransaction<ZeroSchema>;
       }) => {
-        const state = Predicate.hasProperty(ctx, ClientStateSymbol)
-          ? (ctx as ZeroContext)[ClientStateSymbol]
-          : undefined;
-        if (state === undefined) {
+        // `ZfxClient.make` passes the services it captured as Zero's `context`.
+        if (!Context.isContext(ctx)) {
           return Promise.reject(new Error(`Mutator "${name}" must run on a Zero instance made with ZfxClient.make`));
         }
         const envelope = unwrapEnvelope(args);
-        const pending = envelope?.meta === undefined ? undefined : state.pending.get(envelope.meta.id);
+        // Only the optimistic run answers the caller; rebases re-run the same write later.
+        const pending = tx.reason === "optimistic" && Predicate.isObject(args) ? pendingWrites.get(args) : undefined;
+        pending?.span.attribute("zero.mutationID", tx.mutationID);
 
         return decode(envelope?.args).pipe(
           Effect.catchTag("SchemaError", (e) => Effect.fail(new ClientArgsParseError({ cause: Cause.fail(e) }))),
           Effect.flatMap(definition.mutator),
           Effect.tapCause((cause) =>
             Effect.sync(() => {
-              // Only the optimistic run answers the caller; rebases re-run the same write later.
-              if (pending !== undefined && tx.reason === "optimistic") pending.clientFailure = cause;
+              if (pending !== undefined) pending.clientFailure = cause;
             }),
           ),
           Effect.withSpan("zero.mutator", {
-            parent: pending?.span,
+            parent: fromTraceparent(envelope?.traceparent),
             attributes: { "zero.mutator": name, "zero.mutation.reason": tx.reason },
           }),
           Effect.provideService(transaction[ContextSymbol], tx),
           Effect.asVoid,
           // The services were captured by `ZfxClient.make`, which requires every mutator's services.
-          (effect) => Effect.runPromiseWith(state.context)(effect as Effect.Effect<void, unknown>),
+          (effect) => Effect.runPromiseWith(ctx)(effect as Effect.Effect<void, unknown>),
         );
       },
     },
@@ -229,8 +219,6 @@ export const server = <TRegistry extends AnyRegistry, const O extends Overrides<
   overrides: O,
 ): ServerMutators<TRegistry, O> => ({ [ServerMutatorsTypeId]: ServerMutatorsTypeId, registry, overrides });
 
-export const isServerMutators = (u: unknown): u is AnyServerMutators => Predicate.hasProperty(u, ServerMutatorsTypeId);
-
 type ServerTreeRequirements<T, O, ClientTransactionId> = {
   [K in Keys<T>]: T[K] extends AnyMutator
     ? K extends keyof O
@@ -253,38 +241,6 @@ export type ServerRequirements<T extends AnyRegistry | AnyServerMutators> = T ex
   : T extends AnyRegistry
     ? ServerTreeRequirements<T, unknown, Transaction<T>[typeof ContextSymbol]["Identifier"]>
     : never;
-
-/**
- * Finds a mutator by its path, with its server override if it has one.
- */
-export const lookup = (
-  mutators: AnyRegistry | AnyServerMutators,
-  path: ReadonlyArray<string>,
-):
-  | {
-      readonly mutator: AnyMutator;
-      readonly override: ((args: unknown) => Effect.Effect<unknown, unknown, unknown>) | undefined;
-    }
-  | undefined => {
-  const [registry, overrides] = isServerMutators(mutators)
-    ? [mutators.registry, mutators.overrides]
-    : [mutators, undefined];
-  let node: unknown = registry;
-  let overrideNode: unknown = overrides;
-  for (const key of path) {
-    if (key === "~" || !Predicate.hasProperty(node, key)) return undefined;
-    node = node[key];
-    overrideNode = Predicate.hasProperty(overrideNode, key) ? overrideNode[key] : undefined;
-  }
-  return isMutator(node)
-    ? {
-        mutator: node,
-        override: Predicate.isFunction(overrideNode)
-          ? (overrideNode as (args: unknown) => Effect.Effect<unknown, unknown, unknown>)
-          : undefined,
-      }
-    : undefined;
-};
 
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
   readonly cause: Cause.Cause<unknown>;

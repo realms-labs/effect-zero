@@ -136,8 +136,8 @@ export const createZero = Effect.fn(function* (opts: { userID: string; auth?: st
     server: opts.server, // your zero-cache server URL
     mutateURL: opts.mutateURL, // your push endpoint URL
     kvStore: "idb", // or "mem" for in-memory
-    // Optional: send Zero's own logs through Effect's logger, from "warn" up
-    logs: { level: "warn" },
+    // Optional: send Zero's own logs (from its `logLevel`, "warn" by default) through Effect's logger
+    logs: true,
   });
 });
 ```
@@ -161,15 +161,20 @@ fails `client` or `server` with a `MutationError` (`kind: "zero" | "app"`, `orig
 mutator's typed failure comes back as itself.
 
 Each mutation is traced:
-- **`zero.mutation`** (with `zero.mutator`, `zero.clientID`, `zero.clientGroupID` and the connection state) spans the
-  whole write, with **`zero.mutation.client`** and **`zero.mutation.server`** children for its two outcomes. They're
-  recorded whether or not you await them.
+- **`zero.mutation`** (with `zero.mutator`, `zero.clientID`, `zero.mutationID`, `zero.clientGroupID` and the connection
+  state) spans the whole write, with **`zero.mutation.client`** and **`zero.mutation.server`** children for its two
+  outcomes. They're recorded whether or not you await them.
 - **`zero.mutator`** spans each run of the mutator's body on the client (`zero.mutation.reason`: `optimistic` or
   `rebase`).
-- **`zero.mutation.handle`** spans each mutation on the server, with a link to the client's `zero.mutation` span.
+- **`zero.mutation.handle`** spans each mutation on the server (with the same `zero.clientID` and `zero.mutationID`),
+  with a link to the client's `zero.mutation` span.
 
 Zero's own `zero.mutate(request)` also works with these requests, but isn't traced and resolves Zero's result details
 instead of failing.
+
+> [!NOTE]
+> A mutation's args go over the wire as `{ args, traceparent }`, so deploy the server before clients that use this
+> version.
 
 ## Synced queries
 

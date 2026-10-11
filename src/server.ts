@@ -3,13 +3,7 @@ import type {
   Schema as ZeroSchema,
   ServerTransaction as ZeroServerTransaction,
 } from "@rocicorp/zero";
-import {
-  ApplicationError,
-  handleMutateRequest,
-  handleQueryRequest,
-  type MutateRequestHandler,
-  OutOfOrderMutation,
-} from "@rocicorp/zero/server";
+import { ApplicationError, handleMutateRequest, handleQueryRequest, OutOfOrderMutation } from "@rocicorp/zero/server";
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
@@ -42,8 +36,6 @@ type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 // `Parameters<...>[0]` because the handlers are overloaded (so `Parameters` resolves to the wrong
 // overload) and their argument type isn't exported.
 type MutateUserId = Extract<Awaited<ReturnType<typeof handleMutateRequest>>, { kind: "MutateResponse" }>["userID"];
-// biome-ignore lint/suspicious/noExplicitAny: any database
-type CustomMutation = Parameters<MutateRequestHandler<any>>[1];
 type QueryUserId = Extract<Awaited<ReturnType<typeof handleQueryRequest>>, { kind: "QueryResponse" }>["userID"];
 
 /**
@@ -80,8 +72,10 @@ export const handleMutate = Effect.fn(function* <
     try: () =>
       handleMutateRequest({
         dbProvider: transaction[DatabaseSymbol],
-        handler: (transact_, mutation) =>
-          Effect.gen(function* () {
+        handler: (transact_, mutation) => {
+          const { args, traceparent } = unwrapEnvelope(mutation.args[0]) ?? {};
+          const clientSpan = fromTraceparent(traceparent);
+          return Effect.gen(function* () {
             const response = yield* Deferred.make<Awaited<ReturnType<typeof transact_>>>();
 
             const transact = Effect.fn(function* <A, E, R>(
@@ -109,14 +103,11 @@ export const handleMutate = Effect.fn(function* <
               );
             }, ServerSynchronizationContext.guard);
 
-            const exit: Exit.Exit<unknown, unknown> = yield* (
-              runMutation(mutators, transaction, mutation) as Effect.Effect<
-                unknown,
-                unknown,
-                | Mutator.ServerRequirements<TMutators>
-                | (typeof transaction)[typeof ServerTransactionCallbackSymbol]["Identifier"]
-                | ServerSynchronizationContext.ServerSynchronizationContext
-              >
+            const exit: Exit.Exit<unknown, unknown> = yield* runMutation(
+              mutators,
+              transaction,
+              mutation.name,
+              args,
             ).pipe(
               ServerSynchronizationContext.finalize,
               Effect.provide([
@@ -134,7 +125,15 @@ export const handleMutate = Effect.fn(function* <
               Effect.flatten,
             );
           }).pipe(
-            Effect.withSpan("zero.mutation.handle", mutationSpanOptions(mutation)),
+            Effect.withSpan("zero.mutation.handle", {
+              attributes: {
+                "zero.mutator": mutation.name,
+                "zero.clientID": mutation.clientID,
+                "zero.mutationID": mutation.id,
+              },
+              // A link, not the parent: the push request has its own trace, and a write can be pushed more than once.
+              links: clientSpan === undefined ? [] : [{ span: clientSpan, attributes: {} }],
+            }),
             Effect.catchCause((cause) => {
               const error = cause.pipe(Cause.squash, (squashed) =>
                 TransactInternalError.is(squashed) ? Cause.squash(squashed.cause) : squashed,
@@ -144,7 +143,8 @@ export const handleMutate = Effect.fn(function* <
             }),
             Effect.provide(ctx),
             Effect.runPromise,
-          ),
+          );
+        },
         query,
         body: body as ReadonlyJSONValue,
         userID: userId,
@@ -153,39 +153,39 @@ export const handleMutate = Effect.fn(function* <
   });
 });
 
-const runMutation = Effect.fn(function* (
+const runMutation = (
   mutators: Mutator.AnyRegistry | Mutator.AnyServerMutators,
   // biome-ignore lint/suspicious/noExplicitAny: any server transaction
   transaction: ServerTransaction.Context<any, any>,
-  mutation: CustomMutation,
-) {
-  // Mutators sent with `zero.mutate(request)` are named "namespace.name" and wrap their args in an envelope.
-  // Clients of effect-zero < 0.9 named them "namespace|name" and sent the args as-is.
-  const legacy = mutation.name.includes("|");
-  const { mutator, override } = yield* Effect.fromNullishOr(
-    Mutator.lookup(mutators, mutation.name.split(legacy ? "|" : ".")),
-  ).pipe(Effect.mapError(() => new MutatorNotFoundError({ name: mutation.name })));
+  name: string,
+  encodedArgs: unknown,
+  // `handleMutate` requires the services of whichever implementation runs.
+): Effect.Effect<unknown, unknown> =>
+  Effect.gen(function* () {
+    const { mutator, override } = yield* Effect.fromNullishOr(lookup(mutators, name)).pipe(
+      Effect.mapError(() => new MutatorNotFoundError({ name })),
+    );
+    const args = yield* Schema.decodeUnknownEffect(mutator.payload)(encodedArgs).pipe(
+      Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
+    );
+    return yield* override === undefined ? transaction.execute(mutator.mutator(args)) : override(args);
+  }) as Effect.Effect<unknown, unknown>;
 
-  const args = yield* Schema.decodeUnknownEffect(mutator.payload)(
-    legacy ? mutation.args[0] : unwrapEnvelope(mutation.args[0])?.args,
-  ).pipe(Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))));
-
-  return yield* override === undefined ? transaction.execute(mutator.mutator(args)) : override(args);
-});
-
-const mutationSpanOptions = (mutation: CustomMutation) => {
-  const meta = mutation.name.includes("|") ? undefined : unwrapEnvelope(mutation.args[0])?.meta;
-  const clientSpan = fromTraceparent(meta?.traceparent);
-  return {
-    attributes: {
-      "zero.mutator": mutation.name.replaceAll("|", "."),
-      "zero.clientID": mutation.clientID,
-      "zero.mutationID": mutation.id,
-      ...(meta === undefined ? {} : { "zero.mutation.id": meta.id }),
-    },
-    // A link rather than the parent: the push request has its own trace, and a write can be pushed more than once.
-    links: clientSpan === undefined ? [] : [{ span: clientSpan, attributes: {} }],
-  };
+/** Finds a mutator by its dotted name, with its server override if it has one. */
+const lookup = (mutators: Mutator.AnyRegistry | Mutator.AnyServerMutators, name: string) => {
+  const [registry, overrides] =
+    Mutator.ServerMutatorsTypeId in mutators ? [mutators.registry, mutators.overrides] : [mutators, undefined];
+  const at = (root: unknown) =>
+    name.split(".").reduce<unknown>((node, key) => (Predicate.hasProperty(node, key) ? node[key] : undefined), root);
+  const mutator = at(registry);
+  const override = at(overrides);
+  return Predicate.isFunction(mutator) && Predicate.hasProperty(mutator, "mutatorName")
+    ? {
+        mutator: mutator as Mutator.AnyMutator,
+        // biome-ignore lint/suspicious/noExplicitAny: any server implementation
+        override: Predicate.isFunction(override) ? (override as (args: any) => Effect.Effect<unknown>) : undefined,
+      }
+    : undefined;
 };
 
 export const makeApplicationError = (cause: Cause.Cause<unknown>) => {

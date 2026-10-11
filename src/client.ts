@@ -1,22 +1,14 @@
 import { type MutatorResultDetails, type ReadonlyJSONValue, Zero, type ZeroOptions } from "@rocicorp/zero";
-import * as Clock from "effect/Clock";
+import type * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import type { NodeInspectSymbol } from "effect/Inspectable";
-import type * as Tracer from "effect/Tracer";
+import * as Scope from "effect/Scope";
 import type * as Unify from "effect/Unify";
 import { type ContextSymbol, SchemaSymbol } from "./client-transaction.js";
-import {
-  type ClientState,
-  ClientStateSymbol,
-  makeWriteId,
-  type PendingWrite,
-  toTraceparent,
-  unwrapEnvelope,
-  type ZeroContext,
-} from "./internal/mutation.js";
+import { type PendingWrite, pendingWrites, toTraceparent, unwrapEnvelope } from "./internal/mutation.js";
 import * as Mutator from "./mutator.js";
 
 export { ClientArgsParseError } from "./mutator.js";
@@ -24,17 +16,16 @@ export { ClientArgsParseError } from "./mutator.js";
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
-type ZeroLogLevel = "debug" | "info" | "warn" | "error";
-
 export type Options<TRegistry extends Mutator.AnyRegistry> = Omit<
   ZeroOptions<Mutator.ZeroSchemaOf<TRegistry>>,
   "schema" | "mutators" | "context"
 > & {
-  /** Sends Zero's own logs through Effect's logger, annotated with `logger: "zero"`, from `level` up. */
-  readonly logs?: { readonly level?: ZeroLogLevel | undefined } | undefined;
+  /**
+   * Sends Zero's own logs (from its `logLevel`, `"warn"` by default) through Effect's logger, annotated with
+   * `logger: "zero"`.
+   */
+  readonly logs?: boolean | undefined;
 };
-
-const states = new WeakMap<object, ClientState>();
 
 /**
  * Makes a Zero client that runs the registry's mutators with the services in scope here.
@@ -49,39 +40,38 @@ export const make = Effect.fn(function* <TRegistry extends Mutator.AnyRegistry>(
     yield* Effect.context<
       Exclude<Mutator.Requirements<TRegistry>, Mutator.Transaction<TRegistry>[typeof ContextSymbol]["Identifier"]>
     >();
-  const state: ClientState = { context: context as ClientState["context"], pending: new Map() };
   const { logs, ...zeroOptions } = options;
   const runLog = Effect.runForkWith(context);
 
   return yield* Effect.acquireRelease(
-    Effect.sync(() => {
-      const zero = new Zero<Mutator.ZeroSchemaOf<TRegistry>, undefined, ZeroContext>({
-        ...(logs === undefined
-          ? {}
-          : {
-              logLevel: logs.level ?? "warn",
-              logSink: {
-                log: (level: ZeroLogLevel, logContext: Record<string, unknown> | undefined, ...args: unknown[]) =>
-                  void runLog(
-                    Effect.logWithLevel(logLevels[level])(...args).pipe(
-                      Effect.annotateLogs({ ...logContext, logger: "zero" }),
+    Effect.sync(
+      () =>
+        new Zero({
+          ...(logs
+            ? {
+                logSink: {
+                  log: (level: ZeroLogLevel, logContext: Record<string, unknown> | undefined, ...args: unknown[]) =>
+                    void runLog(
+                      Effect.logWithLevel(logLevels[level])(...args).pipe(
+                        Effect.annotateLogs({ ...logContext, logger: "zero" }),
+                      ),
                     ),
-                  ),
-              },
-            }),
-        ...zeroOptions,
-        schema: transaction[SchemaSymbol],
-        // A Zero mutator registry: its mutators are the very objects `ZfxClient.mutate` sends.
-        mutators: mutators as never,
-        context: { [ClientStateSymbol]: state },
-      } as ZeroOptions<Mutator.ZeroSchemaOf<TRegistry>, undefined, ZeroContext>);
-      states.set(zero, state);
-      // The context only carries effect-zero's own state, so it isn't part of the client's type.
-      return zero as unknown as Zero<Mutator.ZeroSchemaOf<TRegistry>>;
-    }),
+                },
+              }
+            : {}),
+          ...zeroOptions,
+          schema: transaction[SchemaSymbol],
+          // A Zero mutator registry: its mutators are the very objects `ZfxClient.mutate` sends.
+          mutators: mutators as never,
+          // The mutators run with these services.
+          context: context as never,
+        } as ZeroOptions<Mutator.ZeroSchemaOf<TRegistry>>),
+    ),
     (zero) => Effect.promise(() => zero.close()),
   );
 });
+
+type ZeroLogLevel = "debug" | "info" | "warn" | "error";
 
 const logLevels = { debug: "Debug", info: "Info", warn: "Warn", error: "Error" } as const;
 
@@ -116,51 +106,30 @@ export const mutate = <Type, E>(
   request: Mutator.MutateRequest<Type, E>,
 ): Effect.Effect<Mutation<E>> =>
   Effect.gen(function* () {
-    const state = states.get(zero);
-    if (state === undefined) {
-      return yield* Effect.die(new Error("ZfxClient.mutate requires a Zero instance made with ZfxClient.make"));
-    }
-
     const name = request.mutator.mutatorName;
-    const id = makeWriteId();
     const connection = zero.connection.state.current;
-    const span = yield* Effect.makeSpan("zero.mutation", {
+    // The span outlives this call, so it ends when this scope closes, once both outcomes are known.
+    const scope = yield* Scope.make();
+    const span = yield* Effect.makeSpanScoped("zero.mutation", {
       attributes: {
         "zero.mutator": name,
-        "zero.mutation.id": id,
         "zero.clientID": zero.clientID,
         "zero.connection.state": connection.name,
         ...("reason" in connection && typeof connection.reason === "string"
           ? { "zero.connection.reason": connection.reason }
           : {}),
       },
-    });
+    }).pipe(Scope.provide(scope));
 
     const pending: PendingWrite = { span, clientFailure: undefined };
-    state.pending.set(id, pending);
+    const envelope = { ...unwrapEnvelope(request.args), traceparent: toTraceparent(span) };
+    pendingWrites.set(envelope, pending);
+    const result = yield* Effect.sync(() => zero.mutate({ ...request, args: envelope })).pipe(
+      Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
+    );
 
-    const result = yield* Effect.sync(() =>
-      zero.mutate({
-        ...request,
-        args: { ...unwrapEnvelope(request.args), meta: { id, traceparent: toTraceparent(span) } },
-      }),
-    ).pipe(Effect.onError((cause) => endSpan(span, Exit.failCause(cause)).pipe(Effect.andThen(forget(state, id)))));
-
-    const client = yield* Deferred.make<void, MutationError | Mutator.ClientArgsParseError | E>();
-    const server = yield* Deferred.make<void, MutationError>();
-
-    const settle = (origin: "client" | "server", details: Promise<MutatorResultDetails>) =>
-      Effect.promise(() => details).pipe(
-        Effect.flatMap((details): Effect.Effect<void, unknown> => {
-          if (details.type === "success") return Effect.void;
-          // The client mutator's own failure. Zero reports it for the server too: the write was never pushed.
-          if (pending.clientFailure !== undefined) {
-            return origin === "client"
-              ? Effect.failCause(pending.clientFailure)
-              : Effect.fail(toMutationError(name, "client", details.error));
-          }
-          return Effect.fail(toMutationError(name, origin, details.error));
-        }),
+    const traced = <E2>(origin: "client" | "server", outcome: Effect.Effect<void, E2>) =>
+      outcome.pipe(
         Effect.tapError((error) =>
           error instanceof MutationError
             ? Effect.annotateCurrentSpan({
@@ -170,26 +139,47 @@ export const mutate = <Type, E>(
             : Effect.void,
         ),
         Effect.withSpan(`zero.mutation.${origin}`, { parent: span, attributes: { "zero.mutator": name } }),
-        Effect.exit,
+        // Forked so both outcomes are recorded even if nobody awaits them; joining a fiber never re-runs it.
+        Effect.forkDetach,
       );
 
-    yield* Effect.gen(function* () {
-      span.attribute("zero.clientGroupID", yield* Effect.promise(() => zero.clientGroupID));
-      const [clientExit, serverExit] = yield* Effect.all(
-        [
-          settle("client", result.client).pipe(
-            Effect.tap((exit) => Deferred.done(client, exit as Exit.Exit<void, MutationError | E>)),
-          ),
-          settle("server", result.server).pipe(
-            Effect.tap((exit) => Deferred.done(server, exit as Exit.Exit<void, MutationError>)),
-          ),
-        ],
-        { concurrency: 2 },
-      );
-      yield* endSpan(span, Exit.isFailure(clientExit) ? clientExit : serverExit);
-    }).pipe(Effect.ensuring(forget(state, id)), Effect.forkDetach);
+    const client = yield* traced(
+      "client",
+      Effect.flatMap(
+        Effect.promise(() => result.client),
+        (details): Effect.Effect<void, MutationError | Mutator.ClientArgsParseError | E> =>
+          details.type === "success"
+            ? Effect.void
+            : pending.clientFailure !== undefined
+              ? // The client mutator's own (typed) failure.
+                Effect.failCause(pending.clientFailure as Cause.Cause<Mutator.ClientArgsParseError | E>)
+              : Effect.fail(toMutationError(name, "client", details.error)),
+      ),
+    );
+    const server = yield* traced(
+      "server",
+      Effect.flatMap(
+        Effect.promise(() => result.server),
+        (details) =>
+          details.type === "success"
+            ? Effect.void
+            : // A client failure is reported for the server too: the write was never pushed.
+              Effect.fail(
+                toMutationError(name, pending.clientFailure !== undefined ? "client" : "server", details.error),
+              ),
+      ),
+    );
 
-    return { client: Deferred.await(client), server: Deferred.await(server) };
+    yield* Effect.forkDetach(
+      Effect.gen(function* () {
+        span.attribute("zero.clientGroupID", yield* Effect.promise(() => zero.clientGroupID));
+        const clientExit = yield* Effect.exit(Fiber.join(client));
+        const serverExit = yield* Effect.exit(Fiber.join(server));
+        yield* Scope.close(scope, Exit.isFailure(clientExit) ? clientExit : serverExit);
+      }),
+    );
+
+    return { client: Fiber.join(client), server: Fiber.join(server) };
   });
 
 const toMutationError = (
@@ -204,8 +194,3 @@ const toMutationError = (
     message: error.message,
     details: error.type === "app" ? error.details : undefined,
   });
-
-const endSpan = (span: Tracer.Span, exit: Exit.Exit<unknown, unknown>) =>
-  Effect.flatMap(Clock.currentTimeNanos, (now) => Effect.sync(() => span.end(now, exit)));
-
-const forget = (state: ClientState, id: string) => Effect.sync(() => state.pending.delete(id));
