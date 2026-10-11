@@ -805,7 +805,7 @@ it.live(
       _tag: "MutationError",
       mutator: "clientFailsTyped",
       origin: "client",
-      kind: "app",
+      type: "app",
     });
   }),
 );
@@ -823,7 +823,7 @@ it.live(
       _tag: "MutationError",
       mutator: "throwsError",
       origin: "server",
-      kind: "app",
+      type: "app",
       message: "error in throwsError",
     });
   }),
@@ -855,7 +855,7 @@ it.live(
     expect(parent.status._tag).toBe("Ended");
     if (parent.status._tag === "Ended") expect(Exit.isSuccess(parent.status.exit)).toBe(true);
 
-    // The client mutator's run is a child of the write, through the traceparent the write sends.
+    // The client mutator's run is a child of the write, through the span context the write sends.
     const isChildOfParent = (span: Tracer.NativeSpan) =>
       Option.match(span.parent, { onNone: () => false, onSome: (p) => p.spanId === parent.spanId });
     const children = spans.filter(isChildOfParent);
@@ -865,16 +865,17 @@ it.live(
     const body = children.find((span) => span.name === "zero.mutator")!;
     expect(Object.fromEntries(body.attributes)).toMatchObject({
       "zero.mutator": "messages.create",
+      "zero.clientID": z.clientID,
+      "zero.mutationID": expect.any(Number),
       "zero.mutation.reason": "optimistic",
     });
 
     // The server's span for the same write (Zero's client and mutation IDs) links back to the client's span.
-    expect(parent.attributes.get("zero.mutationID")).toEqual(expect.any(Number));
     const handle = spans.find(
       (span) =>
         span.name === "zero.mutation.handle" &&
         span.attributes.get("zero.clientID") === z.clientID &&
-        span.attributes.get("zero.mutationID") === parent.attributes.get("zero.mutationID"),
+        span.attributes.get("zero.mutationID") === body.attributes.get("zero.mutationID"),
     )!;
     expect(handle.attributes.get("zero.mutator")).toBe("messages.create");
     expect(handle.links.map((link) => [link.span.traceId, link.span.spanId])).toEqual([

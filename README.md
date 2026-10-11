@@ -157,15 +157,15 @@ const program = Effect.gen(function* () {
 ```
 
 `ZfxClient.mutate` sends the mutation as soon as it runs. A rejected mutation (Zero offline, or a mutator failing)
-fails `client` or `server` with a `MutationError` (`kind: "zero" | "app"`, `origin: "client" | "server"`), and a client
-mutator's typed failure comes back as itself.
+fails `client` or `server` with a `MutationError` carrying Zero's error (`type: "zero" | "app"`, `message`, `details`)
+and its `origin` (`"client" | "server"`), and a client mutator's typed failure comes back as itself.
 
 Each mutation is traced:
-- **`zero.mutation`** (with `zero.mutator`, `zero.clientID`, `zero.mutationID`, `zero.clientGroupID` and the connection
-  state) spans the whole write, with **`zero.mutation.client`** and **`zero.mutation.server`** children for its two
-  outcomes. They're recorded whether or not you await them.
-- **`zero.mutator`** spans each run of the mutator's body on the client (`zero.mutation.reason`: `optimistic` or
-  `rebase`).
+- **`zero.mutation`** (with `zero.mutator`, `zero.clientID`, `zero.clientGroupID` and the connection state) spans the
+  whole write, with **`zero.mutation.client`** and **`zero.mutation.server`** children for its two outcomes. They're
+  recorded whether or not you await them.
+- **`zero.mutator`** spans each run of the mutator's body on the client, with `zero.clientID`, Zero's `zero.mutationID`
+  and `zero.mutation.reason` (`optimistic` or `rebase`).
 - **`zero.mutation.handle`** spans each mutation on the server (with the same `zero.clientID` and `zero.mutationID`),
   with a link to the client's `zero.mutation` span.
 
@@ -173,8 +173,7 @@ Zero's own `zero.mutate(request)` also works with these requests, but isn't trac
 instead of failing.
 
 > [!NOTE]
-> A mutation's args go over the wire as `{ args, traceparent }`, so deploy the server before clients that use this
-> version.
+> A mutation's args go over the wire as `{ args, span }`, so deploy the server before clients that use this version.
 
 ## Synced queries
 
