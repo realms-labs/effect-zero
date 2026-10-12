@@ -142,18 +142,25 @@ export const createZero = Effect.fn(function* (opts: { userID: string; auth?: st
 
 ### Running mutations
 
-Calling a mutator encodes its args and returns a Zero mutation request, which `zero.mutate` runs, exactly as with
-Zero's own `defineMutators`:
-
 ```ts
 const program = Effect.gen(function* () {
   const zero = yield* createZero({ /* ... */ });
 
-  // Zero's result: `client` and `server` promises of Zero's result details
-  const result = zero.mutate(mutators.todo.create({ id: "1", title: "Write docs" }));
-  yield* Effect.promise(() => result.server);
+  const mutation = yield* ZfxClient.mutate(zero, mutators.todo.create({ id: "1", title: "Write docs" }));
+
+  // The client and server outcomes settle independently; await either, both, or neither.
+  yield* mutation.client; // applied locally; fails with `MutationError`
+  yield* mutation.server; // applied by the server; fails with `MutationError`
 });
 ```
+
+`ZfxClient.mutate` sends the mutation with `zero.mutate(request)` as soon as it runs, with the same args Zero would
+send. A rejected mutation (Zero offline, or a mutator failing) fails `client` or `server` with a `MutationError`
+carrying Zero's error (`type: "zero" | "app"`, `message`, `details`) and its `origin` (`"client" | "server"`). As in
+Zero, a mutator's error survives as its name in `details`.
+
+Zero's own `zero.mutate(request)` also works with these requests, and resolves Zero's result details instead of
+failing.
 
 ## Synced queries
 

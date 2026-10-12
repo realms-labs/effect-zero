@@ -90,6 +90,14 @@ describe("Type tests", () => {
       expectTypeOf(mutators.messages.create.mutatorName).toEqualTypeOf<string>();
     });
 
+    it("mutate's outcomes fail with Zero's error details", () => {
+      const mutation = Client.mutate({} as any, mutators.transformArgs({ at: new Date() }));
+      expectTypeOf<Effect.Success<typeof mutation>>().toExtend<Client.Mutation>();
+      expectTypeOf<Effect.Error<Client.Mutation["client"]>>().toEqualTypeOf<Client.MutationError>();
+      expectTypeOf<Effect.Error<Client.Mutation["server"]>>().toEqualTypeOf<Client.MutationError>();
+      expectTypeOf<Effect.Services<typeof mutation>>().toEqualTypeOf<never>();
+    });
+
     it("the registry's requirements propagate, without its client transaction", () => {
       expectTypeOf<Mutator.Requirements<typeof mutators>>().toEqualTypeOf<ClientTransactionId | DummyTag | DummyTag2>();
 
