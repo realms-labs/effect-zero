@@ -160,6 +160,7 @@ export const createZero = Effect.fn(function* (opts: { userID: string; auth?: st
     server: opts.server, // your zero-cache server URL
     mutateURL: opts.mutateURL, // your push endpoint URL
     kvStore: "idb", // or "mem" for in-memory
+    // Zero's own logs go through Effect's logger; pass `logSink` to send them elsewhere
     // "mutators" and "schema" are inferred from other arguments, so we don't need to pass them here
   });
 });

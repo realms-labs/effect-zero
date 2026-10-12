@@ -3,6 +3,7 @@ import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
+import type * as LogLevel from "effect/LogLevel";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
@@ -15,10 +16,15 @@ import * as Mutators from "./mutators.js";
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
+export type Options<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators> = Omit<
+  ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>,
+  "schema" | "mutators"
+>;
+
 export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
   transaction: ClientTransaction.Context<TSchema>,
   mutators: TMutators,
-  options: Omit<ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>, "schema" | "mutators">,
+  options: Options<TSchema, TMutators>,
 ) {
   const ctx =
     yield* Effect.context<
@@ -42,6 +48,22 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
   return yield* Effect.acquireRelease(
     Effect.sync(() => {
       return new Zero({
+        // Zero's own logs (at its `logLevel`, "warn" by default) go through Effect's logger, unless `options` sets
+        // a `logSink`.
+        logSink: {
+          log: (level, logContext, ...args) =>
+            Match.value(level).pipe(
+              Match.withReturnType<LogLevel.Severity>(),
+              Match.when("debug", () => "Debug"),
+              Match.when("info", () => "Info"),
+              Match.when("warn", () => "Warn"),
+              Match.when("error", () => "Error"),
+              Match.exhaustive,
+              (severity) => Effect.logWithLevel(severity)(...args),
+              Effect.annotateLogs({ ...logContext, logger: "zero" }),
+              Effect.runForkWith(ctx),
+            ),
+        },
         ...options,
         schema: transaction[SchemaSymbol],
         mutators: unwrappedMutators,
