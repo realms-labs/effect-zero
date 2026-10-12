@@ -250,17 +250,19 @@ const transformArgsQuery = ZfxQuery.make({
 
 const queries = [messageByIdQuery, messagesQuery, transformArgsQuery] satisfies ZfxQuery.MakeQueryResult[];
 
-const waitForLastItem = Effect.fn("waitForLastItem")(
-  <A, E, R>(stream: Stream.Stream<A, E, R>, timeout?: Duration.Duration) => {
-    return pipe(
-      stream,
-      Stream.timeout(timeout ?? Duration.millis(200)),
-      Stream.runLast,
-      Effect.flatMap(Effect.fromOption),
-      Effect.catchTag("NoSuchElementError", () => Effect.fail(new Error("No items received from server"))),
-    );
-  },
-);
+// Waits for a complete result that matches, rather than the last result within a fixed window: zero-cache can make
+// a client reconnect (e.g. after a test truncates a table), which delays its results.
+const waitForComplete = <A extends { readonly _tag: string }, E, R>(
+  stream: Stream.Stream<A, E, R>,
+  predicate: (result: Extract<A, { readonly _tag: "Complete" }>) => boolean,
+) =>
+  stream.pipe(
+    Stream.filter((result): result is Extract<A, { readonly _tag: "Complete" }> => result._tag === "Complete"),
+    Stream.filter(predicate),
+    Stream.runHead,
+    Effect.flatMap(Effect.fromOption),
+    Effect.timeout(Duration.seconds(10)),
+  );
 
 const initZero = Effect.gen(function* () {
   const z = yield* ZfxClient.make(mutators, {
@@ -279,16 +281,13 @@ const initZero = Effect.gen(function* () {
   if (c > 0) {
     yield* Effect.promise(() => rawDb`truncate table messages`);
 
-    // Wait until view is synced after truncation
+    // Wait until the view has synced the truncation. zero-cache can make a new client reconnect first, which
+    // delays its first sync past a fixed window.
     const q = yield* messagesQuery();
-    const stream = ZfxQuery.stream(z, q);
-    yield* pipe(
-      stream,
-      Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-      (s) => waitForLastItem(s, Duration.seconds(2)),
-      Effect.andThen((d) =>
-        Effect.fail(new Error("not empty")).pipe(Effect.when(Effect.sync(() => d.value.length > 0))),
-      ),
+    yield* ZfxQuery.stream(z, q).pipe(
+      Stream.filter((d) => Predicate.isTagged(d, "Complete") && d.value.length === 0),
+      Stream.runHead,
+      Effect.timeout(Duration.seconds(10)),
     );
   }
 
@@ -389,12 +388,7 @@ it.live(
     const stream = ZfxQuery.stream(z, q);
 
     {
-      const result = yield* pipe(
-        stream,
-        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-        waitForLastItem,
-      );
-
+      const result = yield* waitForComplete(stream, (result) => result.value.length === 1);
       expect(result.value).toEqual([value1]);
     }
 
@@ -405,13 +399,7 @@ it.live(
     yield* Effect.promise(() => ddb.insert(messages).values(value2));
 
     {
-      const result = yield* pipe(
-        stream,
-        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-        waitForLastItem,
-      );
-
-      expect(result.value).toHaveLength(2);
+      const result = yield* waitForComplete(stream, (result) => result.value.length === 2);
       expect(result.value).toEqual(expect.arrayContaining([value1, value2]));
     }
   }),
@@ -827,22 +815,12 @@ it.live(
     const stream2 = ZfxQuery.stream(z, q2);
 
     {
-      const result = yield* pipe(
-        stream,
-        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-        (s) => waitForLastItem(s, Duration.millis(500)),
-      );
-
+      const result = yield* waitForComplete(stream, (result) => result.value !== undefined);
       expect(result.value).toEqual(value);
     }
 
     {
-      const result = yield* pipe(
-        stream2,
-        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-        (s) => waitForLastItem(s, Duration.millis(500)),
-      );
-
+      const result = yield* waitForComplete(stream2, (result) => result.value.length === 1);
       expect(result.value).toEqual([value]);
     }
 
@@ -850,12 +828,7 @@ it.live(
       const value2: Message = { id: nanoid(), body: "Hello, world!" };
       yield* Effect.promise(() => ddb.insert(messages).values(value2));
 
-      const result = yield* pipe(
-        stream2,
-        Stream.filter((d) => Predicate.isTagged(d, "Complete")),
-        (s) => waitForLastItem(s, Duration.millis(500)),
-      );
-
+      const result = yield* waitForComplete(stream2, (result) => result.value.length === 2);
       expect(result.value).toEqual(expect.arrayContaining([value, value2]));
     }
   }),
