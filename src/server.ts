@@ -114,6 +114,13 @@ export const handleMutate = Effect.fn(function* <
                 Layer.succeed(transaction[ServerTransactionCallbackSymbol], { transact }),
                 ServerSynchronizationContext.layer,
               ]),
+              Effect.withSpan("zero.mutation.handle", {
+                attributes: {
+                  "zero.mutator": mutation.name,
+                  "zero.clientID": mutation.clientID,
+                  "zero.mutationID": mutation.id,
+                },
+              }),
               Effect.exit,
             );
 

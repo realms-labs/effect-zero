@@ -159,8 +159,17 @@ send. A rejected mutation (Zero offline, or a mutator failing) fails `client` or
 carrying Zero's error (`type: "zero" | "app"`, `message`, `details`) and its `origin` (`"client" | "server"`). As in
 Zero, a mutator's error survives as its name in `details`.
 
-Zero's own `zero.mutate(request)` also works with these requests, and resolves Zero's result details instead of
-failing.
+Each mutation is traced:
+- **`zero.mutation`** (with `zero.mutator`, `zero.clientID`, `zero.clientGroupID` and the connection state) spans the
+  whole write, with **`zero.mutation.client`** and **`zero.mutation.server`** children for its two outcomes. They're
+  recorded whether or not you await them.
+- **`zero.mutator`** spans each run of the mutator's body on the client, with `zero.clientID`, Zero's `zero.mutationID`
+  and `zero.mutation.reason` (`optimistic` or `rebase`).
+- **`zero.mutation.handle`** spans each mutation on the server, with the same `zero.clientID` and `zero.mutationID`, so
+  the client's runs and the server's handling of a write can be joined on them.
+
+Zero's own `zero.mutate(request)` also works with these requests, but isn't traced and resolves Zero's result details
+instead of failing.
 
 ## Synced queries
 
