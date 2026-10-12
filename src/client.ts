@@ -1,9 +1,9 @@
 import { Zero, type ZeroOptions, type Schema as ZeroSchema, type Transaction as ZeroTransaction } from "@rocicorp/zero";
 import * as Cause from "effect/Cause";
-import type * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { NodeInspectSymbol } from "effect/Inspectable";
+import type * as LogLevel from "effect/LogLevel";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
@@ -16,10 +16,15 @@ import * as Mutators from "./mutators.js";
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 
+export type Options<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators> = Omit<
+  ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>,
+  "schema" | "mutators"
+>;
+
 export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators>(
   transaction: ClientTransaction.Context<TSchema>,
   mutators: TMutators,
-  { logs, ...options }: Options<TSchema, TMutators>,
+  options: Options<TSchema, TMutators>,
 ) {
   const ctx =
     yield* Effect.context<
@@ -43,8 +48,22 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
   return yield* Effect.acquireRelease(
     Effect.sync(() => {
       return new Zero({
+        // Zero's own logs (at its `logLevel`, "warn" by default) go through Effect's logger, unless `options` sets
+        // a `logSink`.
+        logSink: {
+          log: (level, logContext, ...args) =>
+            Effect.logWithLevel(
+              Match.value(level).pipe(
+                Match.withReturnType<LogLevel.Severity>(),
+                Match.when("debug", () => "Debug"),
+                Match.when("info", () => "Info"),
+                Match.when("warn", () => "Warn"),
+                Match.when("error", () => "Error"),
+                Match.exhaustive,
+              ),
+            )(...args).pipe(Effect.annotateLogs({ ...logContext, logger: "zero" }), Effect.runForkWith(ctx)),
+        },
         ...options,
-        ...(logs ? { logSink: makeLogSink(ctx) } : {}),
         schema: transaction[SchemaSymbol],
         mutators: unwrappedMutators,
       });
@@ -52,25 +71,6 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
     (zero) => Effect.promise(() => zero.close()),
   );
 });
-
-export type Options<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutators> = Omit<
-  ZeroOptions<TSchema, UnwrapMutators<TSchema, TMutators>>,
-  "schema" | "mutators"
-> & {
-  /** Sends Zero's own logs (from its `logLevel`, `"warn"` by default) through Effect's logger, instead of `logSink`. */
-  readonly logs?: boolean | undefined;
-};
-
-type LogSink = NonNullable<ZeroOptions["logSink"]>;
-
-const makeLogSink = (context: Context.Context<never>): LogSink => ({
-  log: (level, logContext, ...args) =>
-    void Effect.runForkWith(context)(
-      Effect.logWithLevel(logLevels[level])(...args).pipe(Effect.annotateLogs({ ...logContext, logger: "zero" })),
-    ),
-});
-
-const logLevels = { debug: "Debug", info: "Info", warn: "Warn", error: "Error" } as const;
 
 type UnwrapMutator<TSchema extends ZeroSchema, TMutators extends Mutators.AnyMutator> = Parameters<TMutators> extends []
   ? (transaction: ZeroTransaction<TSchema>) => Promise<void>
