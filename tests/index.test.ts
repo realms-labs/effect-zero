@@ -17,7 +17,7 @@ import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { Chunk, Console, Context, Duration, Effect, Latch, Layer, Option, pipe, Schema, Stream } from "effect";
+import { Chunk, Console, Context, Duration, Effect, Latch, Layer, Logger, Option, pipe, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -645,6 +645,28 @@ it.live(
         type: "app",
         message: "client error",
       }),
+    });
+  }),
+);
+
+it.live(
+  "logs: true sends Zero's own logs through Effect's logger",
+  Effect.fn(function* () {
+    const logged: Array<{ readonly message: unknown; readonly logLevel: string }> = [];
+    const z = yield* ZfxClient.make(clientTransaction, clientMutators, {
+      userID: null,
+      server: "http://localhost:4848",
+      mutateURL: "http://localhost:3000/push",
+      logs: true,
+    }).pipe(Effect.provide(Logger.layer([Logger.make(({ message, logLevel }) => logged.push({ message, logLevel }))])));
+
+    // Zero logs a client mutator's failure as an error.
+    yield* Effect.promise(() => z.mutate.clientThrowsError().client);
+    yield* Effect.sleep(Duration.millis(50));
+
+    expect(logged).toContainEqual({
+      message: expect.arrayContaining([expect.stringContaining('Mutator "clientThrowsError" app error on client')]),
+      logLevel: "Error",
     });
   }),
 );
