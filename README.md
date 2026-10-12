@@ -1,101 +1,93 @@
 # effect-zero
 
 ## Custom mutators
-### Defining mutators schema
+
+Mutators follow Zero's [mutation request model](https://zero.rocicorp.dev/docs/mutators): you define them once,
+register them, and run a mutation by calling a mutator to get a request.
+
+### Defining mutators
+
 ```ts
 // mutators.ts
+import * as ZfxClientTransaction from "effect-zero/client-transaction";
+import * as ZfxMutator from "effect-zero/mutator";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { schema } from "./schema"; // your Zero schema (define it, or use something like drizzle-zero)
 
-import * as ZfxMutators from "effect-zero/mutators";
+// The "client-side" transaction
+export const clientTransaction = ZfxClientTransaction.make("ClientTransaction", schema);
 
-// Define your mutators schema
-// Both root-level and nested mutators are supported (up to 1 level of nesting)
-export const mutatorSchema = ZfxMutators.schema({
-  // root-level mutator
-  /*
-  foo: Schema.Struct({
-    message: Schema.String,
+// Each mutator has a payload codec and an Effect body, like `ZfxQuery.make`
+const createTodo = ZfxMutator.make({
+  payload: Schema.Struct({ id: Schema.String, title: Schema.String }),
+  mutator: Effect.fn(function* ({ id, title }) {
+    yield* clientTransaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
   }),
-  // mutator without arguments
-  /*
-  bar: Schema.Void,
-  */
+});
+
+// Mutators are named after their path in the registry, like Zero's `defineMutators`: "todo.create", "todo.toggle"
+export const mutators = ZfxMutator.registry(clientTransaction, {
   todo: {
-    // nested mutator
-    create: Schema.Struct({
-      id: Schema.String,
-      title: Schema.String,
+    create: createTodo,
+    toggle: ZfxMutator.make({
+      payload: Schema.Struct({ id: Schema.String, done: Schema.Boolean }),
+      mutator: Effect.fn(function* ({ id, done }) {
+        yield* clientTransaction.use((tx) => tx.mutate.TodoTable.update({ id, done }));
+      }),
     }),
-    toggle: Schema.Struct({
-      id: Schema.String,
-      done: Schema.Boolean,
+    // A mutator without arguments
+    clear: ZfxMutator.make({
+      payload: Schema.Void,
+      mutator: Effect.fn(function* () {
+        // ...
+      }),
     }),
   },
 });
 ```
 
 > [!NOTE]
-> Zero stores and sends `undefined` mutator args as `null`, so a mutator may receive `null` where `undefined` was passed. Use `Schema.Void` for mutators without arguments, and `Schema.NullOr(...)` (not `Schema.UndefinedOr(...)`) for optional arguments.
+> Calling a mutator encodes its args right away, so the payload must encode without services.
+> Zero stores and sends `undefined` mutator args as `null`, so a mutator may receive `null` where `undefined` was
+> passed. Use `Schema.Void` for mutators without arguments, and `Schema.NullOr(...)` (not `Schema.UndefinedOr(...)`)
+> for optional arguments.
 
 ### Server setup
 
 ```ts
 // server.ts
-
 import { zeroPostgresJS } from "@rocicorp/zero/server/adapters/postgresjs";
 import * as ZfxMutateServerTypes from "effect-zero/types/mutate-server";
 import * as ZfxPushTypes from "effect-zero/types/push";
 import * as ZfxServerTransaction from "effect-zero/server-transaction";
-import * as ZfxMutators from "effect-zero/mutators";
+import * as ZfxMutator from "effect-zero/mutator";
 import * as ZfxServer from "effect-zero/server";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import postgres from "postgres";
-import { clientTransaction, clientMutators } from "./client"; // see below
-import { mutatorSchema } from "./mutators";
-
-// zero schema (define or use something like drizzle-zero)
+import { clientTransaction, mutators } from "./mutators";
 import { schema } from "./schema";
 
-// setup connection
 // for more driver options, see: https://zero.rocicorp.dev/docs/zql-on-the-server#creating-a-database
-const database = zeroPostgresJS(
-  schema,
-  postgres(process.env.ZERO_UPSTREAM_DB!),
-);
+const database = zeroPostgresJS(schema, postgres(process.env.ZERO_UPSTREAM_DB!));
 
-// The "server-side" transaction
-const serverTransaction = ZfxServerTransaction.make(
-  "ServerTransaction",
-  database,
-  // passing a client transaction allows us to use the client mutators on the server side
-  clientTransaction,
-);
+// The "server-side" transaction. Passing the client transaction lets mutators' shared bodies run on the server.
+const serverTransaction = ZfxServerTransaction.make("ServerTransaction", database, clientTransaction);
 
-// define server mutators
-export const serverMutators = ZfxMutators.make(mutatorSchema, {
+// On the server, every mutator runs its shared body in a server transaction, unless it's overridden here
+// (pass `{}` if nothing is). An override runs outside the transaction, so it can do work before and after it.
+export const serverMutators = ZfxMutator.server(mutators, {
   todo: {
-    create: ({ id, title }) => Effect.gen(function* () {
-      // Note, we can run arbitrary logic before/after performing the zero transaction
-      // this is a unique feature which is not supported by the default zero push processor implementation
-      // shipped with the base `@rocicorp/zero` package
-      
+    create: Effect.fn(function* (args) {
       // before the transaction
       yield* Effect.log("before the transaction");
 
-      yield* Effect.gen(function* () {
-        // during the transaction
-        yield* Effect.log("during the transaction");
-        yield* serverTransaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
-        yield* serverTransaction.use((tx) => tx.mutate.TodoTable.update({ id, done: false }));
-        // ...
-      }).pipe(serverTransaction.execute);
+      // the shared body, in the transaction
+      yield* mutators.todo.create.mutator(args).pipe(serverTransaction.execute);
 
       // after the transaction
       yield* Effect.log("after the transaction");
-    }),
-    toggle: Effect.fn(function* ({ id, done }) {
-      // You can also reuse client mutators on the server
-      yield* clientMutators.todo.toggle({ id, done }).pipe(serverTransaction.execute);
     }),
   },
 });
@@ -130,39 +122,36 @@ export async function handleZeroPush(req: Request): Promise<Response> {
 ```ts
 // client.ts
 import * as ZfxClient from "effect-zero/client";
-import * as ZfxClientTransaction from "effect-zero/client-transaction";
-import * as ZfxMutators from "effect-zero/mutators";
 import * as Effect from "effect/Effect";
-import { schema } from "./schema"; // your schema
-import { mutatorSchema } from "./mutators"; // see above
-
-// The "client-side" transaction
-export const clientTransaction = ZfxClientTransaction.make("ClientTransaction", schema);
-
-export const clientMutators = ZfxMutators.make(mutatorSchema, {
-  todo: {
-    create: Effect.fn(function* ({ id, title }) {
-      yield* clientTransaction.use((tx) => tx.mutate.TodoTable.insert({ id, title, createdAt: Date.now() }));
-    }),
-    toggle: Effect.fn(function* ({ id, done }) {
-      yield* clientTransaction.use((tx) => tx.mutate.TodoTable.update({ id, done }));
-    }),
-  },
-});
+import { mutators } from "./mutators";
 
 // Helper to create a vanilla Zero client instance for querying and mutating
 export const createZero = Effect.fn(function* (opts: { userID: string; auth?: string; server: string; mutateURL: string }) {
-  // `ZfxClient.make` returns an Effect containing a Zero client instance
+  // `ZfxClient.make` returns an Effect containing a Zero client instance. It captures the services the mutators need.
   // Note: this is a scoped effect, so it must be run within a scope (e.g., Effect.scoped)
-  return yield* ZfxClient.make(clientTransaction, clientMutators, {
+  return yield* ZfxClient.make(mutators, {
     userID: opts.userID,
     auth: opts.auth,
     server: opts.server, // your zero-cache server URL
     mutateURL: opts.mutateURL, // your push endpoint URL
     kvStore: "idb", // or "mem" for in-memory
     // Zero's own logs go through Effect's logger; pass `logSink` to send them elsewhere
-    // "mutators" and "schema" are inferred from other arguments, so we don't need to pass them here
   });
+});
+```
+
+### Running mutations
+
+Calling a mutator encodes its args and returns a Zero mutation request, which `zero.mutate` runs, exactly as with
+Zero's own `defineMutators`:
+
+```ts
+const program = Effect.gen(function* () {
+  const zero = yield* createZero({ /* ... */ });
+
+  // Zero's result: `client` and `server` promises of Zero's result details
+  const result = zero.mutate(mutators.todo.create({ id: "1", title: "Write docs" }));
+  yield* Effect.promise(() => result.server);
 });
 ```
 

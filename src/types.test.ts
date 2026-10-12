@@ -1,11 +1,15 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
+import type { MutateRequest as ZeroMutateRequest } from "@rocicorp/zero";
 import { queryInternalsTag } from "@rocicorp/zero/bindings";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
+import type * as Scope from "effect/Scope";
+import * as Client from "./client.js";
 import * as ClientTransaction from "./client-transaction.js";
-import * as Mutators from "./mutators.js";
+import * as Mutator from "./mutator.js";
 import * as Query from "./query.js";
 import * as Server from "./server.js";
 import * as ServerTransaction from "./server-transaction.js";
@@ -36,183 +40,120 @@ const mockDatabase = {} as any;
 
 describe("Type tests", () => {
   describe("Mutators", () => {
-    it("mutators should have correct argument types", () => {
-      const mutatorSchema = Mutators.schema({
-        messages: {
-          create: Schema.Struct({
-            id: Schema.String,
-            body: Schema.String,
-          }),
-        },
-        optionalVoidArg: Schema.Void,
-        noArgs: Schema.Void,
-        transformArgs: Schema.Struct({
-          foo: Schema.NumberFromString,
-        }),
-      });
+    class DummyTag extends Context.Service<DummyTag, {}>()("effect-zero/test/DummyTag") {}
+    class DummyTag2 extends Context.Service<DummyTag2, {}>()("effect-zero/test/DummyTag2") {}
+    class DummyError extends Data.TaggedError("DummyError") {}
 
-      const clientTransaction = ClientTransaction.make("TestClientTransaction", mockZeroSchema);
+    const clientTransaction = ClientTransaction.make("TestClientTransaction", mockZeroSchema);
+    const serverTransaction = ServerTransaction.make("TestServerTransaction", mockDatabase, clientTransaction);
+    type ClientTransactionId = (typeof clientTransaction)[typeof ClientTransaction.ContextSymbol]["Identifier"];
 
-      const mutators = Mutators.make(mutatorSchema, {
-        messages: {
-          create: (msg) =>
-            clientTransaction.use(async () => {
-              // Use msg to verify type
-              const _id: string = msg.id;
-              const _body: string = msg.body;
-            }),
-        },
-        optionalVoidArg: Effect.fn(function* (_a) {}),
-        noArgs: Effect.fn(function* () {}),
-        transformArgs: Effect.fn(function* (_a) {}),
-      });
-
-      // Test void/undefined optional parameter
-      expectTypeOf<Parameters<typeof mutators.optionalVoidArg>>().toEqualTypeOf<[(void | undefined)?]>();
-
-      // Test no-arg mutator
-      expectTypeOf<Parameters<typeof mutators.noArgs>>().toEqualTypeOf<[]>();
-
-      // Test nested mutator with struct schema
-      expectTypeOf<Parameters<typeof mutators.messages.create>>().toEqualTypeOf<
-        [Schema.Schema.Type<typeof mutatorSchema.messages.create>]
-      >();
-
-      // Test transformed args - mutator receives decoded (Type) version
-      expectTypeOf<Parameters<typeof mutators.transformArgs>>().toEqualTypeOf<
-        [Schema.Schema.Type<typeof mutatorSchema.transformArgs>]
-      >();
-    });
-
-    it("nested mutators using Effect.fn should have correct argument types", () => {
-      const mutatorSchema = Mutators.schema({
-        todo: {
-          create: Schema.Struct({
-            id: Schema.String,
-            title: Schema.String,
-          }),
-          toggle: Schema.Struct({
-            id: Schema.String,
-            done: Schema.Boolean,
-          }),
-          delete: Schema.Void,
-        },
-      });
-
-      const clientTransaction = ClientTransaction.make("TestClientTransactionNested", mockZeroSchema);
-
-      // Note: When using Effect.fn with destructuring, TypeScript infers the parameter as `any`.
-      // The runtime still correctly validates/transforms args via the schema.
-      // To get proper type inference, use explicit parameter types or regular arrow functions.
-      const mutators = Mutators.make(mutatorSchema, {
-        todo: {
-          // Using arrow function with explicit type for best inference
-          create: (args: { id: string; title: string }) =>
-            clientTransaction.use(async () => {
-              const _id: string = args.id;
-              const _title: string = args.title;
-            }),
-          // Using Effect.fn with explicit type annotation
-          toggle: Effect.fn(function* (args: { id: string; done: boolean }) {
+    const mutators = Mutator.registry(clientTransaction, {
+      messages: {
+        create: Mutator.make({
+          payload: Schema.Struct({ id: Schema.String, body: Schema.String }),
+          mutator: Effect.fn(function* (msg) {
+            expectTypeOf(msg).toEqualTypeOf<{ readonly id: string; readonly body: string }>();
             yield* clientTransaction.use(async () => {});
           }),
-          // Using Effect.fn with no args (void schema)
-          delete: Effect.fn(function* () {
+        }),
+        deleteAll: Mutator.make({
+          payload: Schema.Void,
+          mutator: Effect.fn(function* () {
+            yield* DummyTag;
             yield* clientTransaction.use(async () => {});
           }),
-        },
-      });
-
-      // Test nested mutator with arrow function - preserves type
-      expectTypeOf<Parameters<typeof mutators.todo.create>>().toEqualTypeOf<[{ id: string; title: string }]>();
-
-      // Test nested mutator with Effect.fn and explicit type annotation - preserves type
-      expectTypeOf<Parameters<typeof mutators.todo.toggle>>().toEqualTypeOf<[{ id: string; done: boolean }]>();
-
-      // Test nested mutator with void schema - delete
-      expectTypeOf<Parameters<typeof mutators.todo.delete>>().toEqualTypeOf<[]>();
-    });
-
-    it("nested mutator requirements should propagate", () => {
-      class NestedDummyTag extends Context.Service<NestedDummyTag, {}>()("effect-zero/test/NestedDummyTag") {}
-
-      class NestedDummyTag2 extends Context.Service<NestedDummyTag2, {}>()("effect-zero/test/NestedDummyTag2") {}
-
-      const clientTransaction = ClientTransaction.make("TestClientTransactionNestedReq", mockZeroSchema);
-      const serverTransaction = ServerTransaction.make(
-        "TestServerTransactionNestedReq",
-        mockDatabase,
-        clientTransaction,
-      );
-
-      const mutatorSchema = Mutators.schema({
-        nested: {
-          withTag1: Schema.Void,
-          withTag2: Schema.Void,
-          noTags: Schema.Void,
-        },
-      });
-
-      const mutators = Mutators.make(mutatorSchema, {
-        nested: {
-          withTag1: Effect.fn(function* () {
-            yield* NestedDummyTag;
-          }),
-          withTag2: Effect.fn(function* () {
-            yield* NestedDummyTag2;
-          }),
-          noTags: Effect.fn(function* () {}),
-        },
-      });
-
-      const serverEffect = Server.handleMutate({ transaction: serverTransaction, mutators, query: {} as any, body: {} as any, userId: undefined });
-
-      // Server effect should require both NestedDummyTag and NestedDummyTag2
-      expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<NestedDummyTag | NestedDummyTag2>();
-    });
-
-    it("mutator requirements should propagate", () => {
-      class DummyTag extends Context.Service<DummyTag, {}>()("effect-zero/test/DummyTag") {}
-
-      class DummyTag2 extends Context.Service<DummyTag2, {}>()("effect-zero/test/DummyTag2") {}
-
-      const clientTransaction = ClientTransaction.make("TestClientTransaction2", mockZeroSchema);
-      const serverTransaction = ServerTransaction.make("TestServerTransaction", mockDatabase, clientTransaction);
-
-      const mutatorSchema = Mutators.schema({
-        dummy: Schema.Void,
-        dummy2: Schema.Void,
-      });
-
-      const mutators = Mutators.make(mutatorSchema, {
-        dummy: Effect.fn(function* () {
-          yield* DummyTag;
         }),
-        dummy2: Effect.fn(function* () {
+      },
+      transformArgs: Mutator.make({
+        payload: Schema.Struct({ at: DateFromNumber }),
+        mutator: Effect.fn(function* ({ at }) {
+          expectTypeOf(at).toEqualTypeOf<Date>();
           yield* DummyTag2;
+          return yield* new DummyError();
+        }),
+      }),
+    });
+
+    it("mutators take their decoded args and produce requests", () => {
+      expectTypeOf<Parameters<typeof mutators.messages.create>>().toEqualTypeOf<
+        [{ readonly id: string; readonly body: string }]
+      >();
+      // A mutator without args is called without args.
+      mutators.messages.deleteAll();
+      expectTypeOf<Parameters<typeof mutators.transformArgs>>().toEqualTypeOf<[{ readonly at: Date }]>();
+      const nullable = Mutator.make({ payload: Schema.NullOr(Schema.String), mutator: () => Effect.void });
+      expectTypeOf<Parameters<typeof nullable.mutator>>().toEqualTypeOf<[string | null]>();
+
+      // A request is also a Zero `MutateRequest`, so `zero.mutate(request)` accepts it.
+      expectTypeOf(mutators.messages.create({ id: "1", body: "a" })).toExtend<ZeroMutateRequest<any, any, any, any>>();
+      expectTypeOf(mutators.messages.create.mutatorName).toEqualTypeOf<string>();
+    });
+
+    it("the registry's requirements propagate, without its client transaction", () => {
+      expectTypeOf<Mutator.Requirements<typeof mutators>>().toEqualTypeOf<ClientTransactionId | DummyTag | DummyTag2>();
+
+      const zero = Client.make(mutators, { userID: null, server: null });
+      expectTypeOf<Effect.Services<typeof zero>>().toEqualTypeOf<Scope.Scope | DummyTag | DummyTag2>();
+    });
+
+    it("handleMutate requires the shared bodies' services when nothing is overridden", () => {
+      const effect = Server.handleMutate({
+        transaction: serverTransaction,
+        mutators: Mutator.server(mutators, {}),
+        query: {} as any,
+        body: {} as any,
+        userId: undefined,
+      });
+      expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<DummyTag | DummyTag2>();
+
+      Server.handleMutate({
+        transaction: serverTransaction,
+        // @ts-expect-error a registry goes through `ZfxMutator.server` first
+        mutators,
+        query: {} as never,
+        body: {} as never,
+        userId: undefined,
+      });
+    });
+
+    it("overrides replace the requirements of the mutators they override", () => {
+      const serverMutators = Mutator.server(mutators, {
+        messages: {
+          deleteAll: Effect.fn(function* () {}),
+        },
+        transformArgs: Effect.fn(function* ({ at }) {
+          expectTypeOf(at).toEqualTypeOf<Date>();
+          yield* mutators.transformArgs.mutator({ at }).pipe(serverTransaction.execute);
         }),
       });
 
-      const serverEffect = Server.handleMutate({ transaction: serverTransaction, mutators, query: {} as any, body: {} as any, userId: undefined });
-
-      // Server effect should require both DummyTag and DummyTag2
-      expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
+      const effect = Server.handleMutate({
+        transaction: serverTransaction,
+        mutators: serverMutators,
+        query: {} as any,
+        body: {} as any,
+        userId: undefined,
+      });
+      // `deleteAll`'s override drops DummyTag; `transformArgs` reuses its body through the server transaction.
+      expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<DummyTag2>();
     });
 
     it("handleMutate has no extra requirements when mutators have none", () => {
-      const clientTransaction = ClientTransaction.make("TestClientTransaction3", mockZeroSchema);
-      const serverTransaction = ServerTransaction.make("TestServerTransaction2", mockDatabase, clientTransaction);
-
-      const mutatorSchema = Mutators.schema({
-        simple: Schema.Void,
+      const simple = Mutator.registry(clientTransaction, {
+        simple: Mutator.make({
+          payload: Schema.Void,
+          mutator: () => clientTransaction.use(async () => {}),
+        }),
       });
 
-      const mutators = Mutators.make(mutatorSchema, {
-        simple: Effect.fn(function* () {}),
+      const effect = Server.handleMutate({
+        transaction: serverTransaction,
+        mutators: Mutator.server(simple, {}),
+        query: {} as any,
+        body: {} as any,
+        userId: undefined,
       });
-
-      const effect = Server.handleMutate({ transaction: serverTransaction, mutators, query: {} as any, body: {} as any, userId: undefined });
-
       expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
     });
   });

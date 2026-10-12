@@ -2,7 +2,7 @@ import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
-import { ClientArgsParseError } from "./client.js";
+import { ClientArgsParseError } from "./mutator.js";
 
 describe("ClientArgsParseError", () => {
   // The schema validation detail is masked to a generic "Internal error" rather than leaked. The getter
