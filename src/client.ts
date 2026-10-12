@@ -52,16 +52,17 @@ export const make = Effect.fn(function* <TSchema extends ZeroSchema, TMutators e
         // a `logSink`.
         logSink: {
           log: (level, logContext, ...args) =>
-            Effect.logWithLevel(
-              Match.value(level).pipe(
-                Match.withReturnType<LogLevel.Severity>(),
-                Match.when("debug", () => "Debug"),
-                Match.when("info", () => "Info"),
-                Match.when("warn", () => "Warn"),
-                Match.when("error", () => "Error"),
-                Match.exhaustive,
-              ),
-            )(...args).pipe(Effect.annotateLogs({ ...logContext, logger: "zero" }), Effect.runForkWith(ctx)),
+            Match.value(level).pipe(
+              Match.withReturnType<LogLevel.Severity>(),
+              Match.when("debug", () => "Debug"),
+              Match.when("info", () => "Info"),
+              Match.when("warn", () => "Warn"),
+              Match.when("error", () => "Error"),
+              Match.exhaustive,
+              (severity) => Effect.logWithLevel(severity)(...args),
+              Effect.annotateLogs({ ...logContext, logger: "zero" }),
+              Effect.runForkWith(ctx),
+            ),
         },
         ...options,
         schema: transaction[SchemaSymbol],
