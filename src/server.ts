@@ -10,10 +10,8 @@ import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fn from "effect/Function";
 import type { NodeInspectSymbol } from "effect/Inspectable";
 import * as Layer from "effect/Layer";
-import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
@@ -139,20 +137,22 @@ export const handleMutate = Effect.fn(function* <
   });
 });
 
-const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Mutation) {
-  // Support both "namespace|name" and "namespace.name" formats, and single-segment names.
-  const [namespace, name] = mutation.name.includes("|") ? Str.split(mutation.name, "|") : Str.split(mutation.name, ".");
+/** Mutators, at the root or nested under namespaces. */
+type MutatorTree<R> = Mutators.AnyMutator<R> | { readonly [key: string]: MutatorTree<R> };
 
-  const mutator = yield* Fn.pipe(
-    mutators,
-    Rec.get<string>(namespace),
-    Option.flatMap((mutator) =>
-      Match.value([mutator, name]).pipe(
-        Match.when([Predicate.isObject, Predicate.isString], ([mutator, name]) => Rec.get<string>(name)(mutator)),
-        Match.when([Predicate.isFunction, Predicate.isUndefined], ([mutator]) => Option.some(mutator)),
-        Match.orElse(() => Option.none()),
-      ),
-    ),
+/**
+ * Runs a mutation. Like upstream, names are split on "." or "|" (the separator of Zero's legacy custom mutators), at
+ * any depth.
+ */
+const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Mutation) {
+  const mutator = yield* Arr.reduce(
+    Str.split(mutation.name, /[.|]/),
+    Option.some<MutatorTree<R>>(mutators),
+    (tree, key) =>
+      // A mutator is a leaf: only a namespace has keys to walk into.
+      tree.pipe(Option.flatMap((node) => (Predicate.isFunction(node) ? Option.none() : Rec.get(node, key)))),
+  ).pipe(
+    Option.filter((node) => Predicate.isFunction(node)),
     Effect.fromOption(() => new MutatorNotFoundError({ name: mutation.name })),
   );
 
