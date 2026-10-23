@@ -131,19 +131,8 @@ const mutators = ZfxMutator.registry(clientTransaction, {
   }),
 });
 
-// Every mutator's server implementation. Most run their shared body in a server transaction.
+// Server-only behaviour. Mutators that aren't overridden run their shared body in a server transaction.
 const serverMutators = ZfxMutator.server(mutators, {
-  messages: {
-    create: (msg) => mutators.messages.create.mutator(msg).pipe(serverTransaction.execute),
-    updateMessage: Effect.fn(function* (msg) {
-      yield* mutators.messages.updateMessage.mutator(msg).pipe(serverTransaction.execute);
-    }),
-    deleteAll: Effect.fn(function* () {
-      yield* mutators.messages.deleteAll.mutator().pipe(serverTransaction.execute);
-    }),
-  },
-  optionalVoidArg: Effect.fn(function* () {}),
-  nullableArg: (msg) => mutators.nullableArg.mutator(msg).pipe(serverTransaction.execute),
   transformArgs: Effect.fn(function* (a) {
     return yield* transformArgsServer(a).pipe(serverTransaction.execute);
   }),
@@ -166,7 +155,6 @@ const serverMutators = ZfxMutator.server(mutators, {
       .pipe(serverTransaction.execute);
     throw new Error("error in throwsErrorAfterTransaction");
   }),
-  clientThrowsError: Effect.fn(function* () {}),
   yieldsError: Effect.fn(function* () {
     yield* Effect.fail(new Error("error in yieldsError"));
   }),
@@ -181,6 +169,7 @@ const serverMutators = ZfxMutator.server(mutators, {
       .pipe(serverTransaction.execute);
     yield* Effect.fail(new Error("error in yieldsErrorAfterTransaction"));
   }),
+  // No transaction at all, which the server rejects.
   noTransaction: Effect.fn(function* () {}),
   doubleTransaction: Effect.fn(function* () {
     yield* serverTransaction

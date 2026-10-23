@@ -97,10 +97,23 @@ describe("Type tests", () => {
       expectTypeOf<Effect.Services<typeof zero>>().toEqualTypeOf<Scope.Scope | DummyTag | DummyTag2>();
     });
 
-    it("handleMutate requires its implementations' services", () => {
+    it("handleMutate requires the shared bodies' services when nothing is overridden", () => {
+      const effect = Server.handleMutate({
+        transaction: serverTransaction,
+        mutators: Mutator.server(mutators, {}),
+        query: {} as any,
+        body: {} as any,
+        userId: undefined,
+      });
+      expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<DummyTag | DummyTag2>();
+
+      // A registry goes through `ZfxMutator.server` before `handleMutate` takes it.
+      expectTypeOf(mutators).not.toExtend<Mutator.AnyServerMutators>();
+    });
+
+    it("overrides replace the requirements of the mutators they override", () => {
       const serverMutators = Mutator.server(mutators, {
         messages: {
-          create: (msg) => mutators.messages.create.mutator(msg).pipe(serverTransaction.execute),
           deleteAll: Effect.fn(function* () {}),
         },
         transformArgs: Effect.fn(function* ({ at }) {
@@ -116,15 +129,8 @@ describe("Type tests", () => {
         body: {} as any,
         userId: undefined,
       });
-      // `deleteAll`'s implementation doesn't use its body, so DummyTag isn't needed; `transformArgs` runs its body
-      // through the server transaction.
+      // `deleteAll`'s override drops DummyTag; `transformArgs` reuses its body through the server transaction.
       expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<DummyTag2>();
-
-      // @ts-expect-error every mutator needs a server implementation
-      Mutator.server(mutators, { transformArgs: Effect.fn(function* () {}) });
-
-      // A registry goes through `ZfxMutator.server` before `handleMutate` takes it.
-      expectTypeOf(mutators).not.toExtend<Mutator.AnyServerMutators>();
     });
 
     it("handleMutate has no extra requirements when mutators have none", () => {
@@ -137,9 +143,7 @@ describe("Type tests", () => {
 
       const effect = Server.handleMutate({
         transaction: serverTransaction,
-        mutators: Mutator.server(simple, {
-          simple: () => simple.simple.mutator().pipe(serverTransaction.execute),
-        }),
+        mutators: Mutator.server(simple, {}),
         query: {} as any,
         body: {} as any,
         userId: undefined,

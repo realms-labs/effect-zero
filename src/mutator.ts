@@ -165,45 +165,48 @@ const makeMutator = <Type, Encoded, E, R>(
   return mutator;
 };
 
-type Implementations<T> = {
-  readonly [K in Keys<T>]: T[K] extends Mutator<infer Type, infer _Encoded, infer _E, infer _R>
+type Overrides<T> = {
+  readonly [K in Keys<T>]?: T[K] extends Mutator<infer Type, infer _Encoded, infer _E, infer _R>
     ? // biome-ignore lint/suspicious/noExplicitAny: any server implementation
       (args: Type) => Effect.Effect<unknown, any, any>
-    : Implementations<T[K]>;
+    : Overrides<T[K]>;
 };
 
 /** The server's view of a registry, made with {@link server}. */
-export interface ServerMutators<TRegistry extends AnyRegistry, I> {
+export interface ServerMutators<TRegistry extends AnyRegistry, O> {
   readonly registry: TRegistry;
-  readonly implementations: I;
+  readonly overrides: O;
 }
 
 export type AnyServerMutators = ServerMutators<AnyRegistry, unknown>;
 
 /**
- * The registry's mutators as the server runs them, for `ZfxServer.handleMutate`. `implementations` has every
- * mutator's server implementation, which runs outside the transaction, so it can do work before and after
- * `serverTransaction.execute`. To run a mutator's shared body, use
- * `registry.todo.create.mutator(args).pipe(serverTransaction.execute)`.
+ * The registry's mutators as the server runs them, for `ZfxServer.handleMutate`. `overrides` replaces some mutators'
+ * bodies, like Zero's `defineMutators(base, overrides)`; every other mutator runs its shared body in a server
+ * transaction, so pass `{}` if nothing differs. An override runs outside the transaction, so it can do work before
+ * and after `serverTransaction.execute`, e.g. `registry.todo.create.mutator(args).pipe(serverTransaction.execute)`.
  */
-export const server = <TRegistry extends AnyRegistry, const I extends Implementations<TRegistry>>(
+export const server = <TRegistry extends AnyRegistry, const O extends Overrides<TRegistry>>(
   registry: TRegistry,
-  implementations: I,
-): ServerMutators<TRegistry, I> => ({ registry, implementations });
+  overrides: O,
+): ServerMutators<TRegistry, O> => ({ registry, overrides });
 
-type ServerTreeRequirements<T, I> = {
+type ServerTreeRequirements<T, O, ClientTransactionId> = {
   [K in Keys<T>]: T[K] extends AnyMutator
-    ? K extends keyof I
-      ? I[K] extends (args: never) => Effect.Effect<infer _A, infer _E, infer R>
+    ? K extends keyof O
+      ? O[K] extends (args: never) => Effect.Effect<infer _A, infer _E, infer R>
         ? R
         : never
-      : never
-    : ServerTreeRequirements<T[K], K extends keyof I ? I[K] : unknown>;
+      : Exclude<Requirements<T[K]>, ClientTransactionId>
+    : ServerTreeRequirements<T[K], K extends keyof O ? O[K] : unknown, ClientTransactionId>;
 }[Keys<T>];
 
-/** The services the server needs to run these mutators: those of their implementations. */
-export type ServerRequirements<T extends AnyServerMutators> = T extends ServerMutators<infer TRegistry, infer I>
-  ? ServerTreeRequirements<TRegistry, I>
+/**
+ * The services the server needs to run these mutators. Mutators that aren't overridden run in a server transaction,
+ * which provides their client transaction.
+ */
+export type ServerRequirements<T extends AnyServerMutators> = T extends ServerMutators<infer TRegistry, infer O>
+  ? ServerTreeRequirements<TRegistry, O, Transaction<TRegistry>[typeof ContextSymbol]["Identifier"]>
   : never;
 
 export class ClientArgsParseError extends Data.TaggedError("ClientArgsParseError")<{
