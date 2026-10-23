@@ -150,8 +150,8 @@ const runMutation = Effect.fn(function* (mutators: Mutator.AnyServerMutators, mu
   );
   const mutator = yield* registry.pipe(
     Option.filter(
-      (u): u is Mutator.Definition<unknown, unknown, unknown, never> =>
-        Predicate.hasProperty(u, "payload") && Schema.isSchema(u.payload),
+      (u): u is Mutator.Mutator<unknown, unknown, unknown, never> =>
+        Predicate.isFunction(u) && Predicate.hasProperty(u, "mutatorName"),
     ),
     Effect.fromOption(() => new MutatorNotFoundError({ name: mutation.name })),
   );
