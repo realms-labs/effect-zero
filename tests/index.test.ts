@@ -890,6 +890,66 @@ it.live(
 );
 
 it.live(
+  "the server runs mutations named by their dotted path",
+  Effect.fn(function* () {
+    // Zero names the mutators in a mutator registry by their path, "namespace.name".
+    const clientID = nanoid();
+    const item: Message = { id: nanoid(), body: "dotted" };
+    const result = yield* ZfxServer.handleMutate({
+      transaction: serverTransaction,
+      mutators: serverMutators,
+      query: { schema: "zero_0", appID: "zero" },
+      body: {
+        clientGroupID: nanoid(),
+        mutations: [{ type: "custom", id: 1, clientID, name: "messages.create", args: [item], timestamp: Date.now() }],
+        pushVersion: 1,
+        timestamp: Date.now(),
+        requestID: nanoid(),
+      },
+      userId: undefined,
+    });
+
+    expect(result).toEqual({
+      kind: "MutateResponse",
+      userID: null,
+      mutations: [{ id: { clientID, id: 1 }, result: {} }],
+    });
+    const rows = yield* Effect.promise(() => rawDb`select body from messages where id = ${item.id}`);
+    expect(rows).toEqual([{ body: "dotted" }]);
+  }),
+);
+
+it.live(
+  "the server still runs mutations named the legacy way",
+  Effect.fn(function* () {
+    // Zero's legacy custom mutators are named "namespace|name", like upstream's server accepts.
+    const clientID = nanoid();
+    const item: Message = { id: nanoid(), body: "legacy" };
+    const result = yield* ZfxServer.handleMutate({
+      transaction: serverTransaction,
+      mutators: serverMutators,
+      query: { schema: "zero_0", appID: "zero" },
+      body: {
+        clientGroupID: nanoid(),
+        mutations: [{ type: "custom", id: 1, clientID, name: "messages|create", args: [item], timestamp: Date.now() }],
+        pushVersion: 1,
+        timestamp: Date.now(),
+        requestID: nanoid(),
+      },
+      userId: undefined,
+    });
+
+    expect(result).toEqual({
+      kind: "MutateResponse",
+      userID: null,
+      mutations: [{ id: { clientID, id: 1 }, result: {} }],
+    });
+    const rows = yield* Effect.promise(() => rawDb`select body from messages where id = ${item.id}`);
+    expect(rows).toEqual([{ body: "legacy" }]);
+  }),
+);
+
+it.live(
   "synced queries should work",
   Effect.fn(function* () {
     const z = yield* initZero;
