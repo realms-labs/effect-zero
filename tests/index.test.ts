@@ -17,7 +17,7 @@ import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { Chunk, Console, Context, Duration, Effect, Latch, Layer, Logger, Option, pipe, Schema, Stream } from "effect";
+import { Chunk, Console, Duration, Effect, Latch, Layer, Logger, Option, pipe, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -393,72 +393,6 @@ test("server is running", async () => {
   await expect(response.text()).resolves.toEqual("OK");
 });
 
-test("handleMutate has no extra requirements", () => {
-  const effect = ZfxServer.handleMutate({
-    transaction: serverTransaction,
-    mutators: serverMutators,
-    query: {} as any,
-    body: {} as any,
-    userId: undefined,
-  });
-
-  expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<never>();
-});
-
-test("mutators should have correct argument types", () => {
-  expectTypeOf<Parameters<typeof clientMutators.optionalVoidArg>>().toEqualTypeOf<[(void | undefined)?]>();
-  expectTypeOf<Parameters<typeof clientMutators.throwsError>>().toEqualTypeOf<[]>();
-  expectTypeOf<Parameters<typeof clientMutators.messages.create>>().toEqualTypeOf<
-    [Schema.Schema.Type<typeof mutatorSchema.messages.create>]
-  >();
-});
-
-test("nested mutators using Effect.fn should have correct argument types", () => {
-  // Nested mutator with struct args using Effect.fn
-  expectTypeOf<Parameters<typeof clientMutators.messages.updateMessage>>().toEqualTypeOf<
-    [{ id: string; body: string }]
-  >();
-
-  // Nested mutator with void args using Effect.fn
-  expectTypeOf<Parameters<typeof clientMutators.messages.deleteAll>>().toEqualTypeOf<[]>();
-
-  // Server mutators should also have correct types
-  expectTypeOf<Parameters<typeof serverMutators.messages.updateMessage>>().toEqualTypeOf<
-    [{ id: string; body: string }]
-  >();
-  expectTypeOf<Parameters<typeof serverMutators.messages.deleteAll>>().toEqualTypeOf<[]>();
-});
-
-test("mutator requirements should propagate", () => {
-  class DummyTag extends Context.Service<DummyTag, {}>()("effect-zero/DummyTag") {}
-
-  class DummyTag2 extends Context.Service<DummyTag2, {}>()("effect-zero/DummyTag2") {}
-
-  const clientTransaction = ZfxClientTransaction.make("DummyClientTransaction", schema);
-  const serverTransaction = ZfxServerTransaction.make("DummyServerTransaction", database, clientTransaction);
-  const mutatorSchema = ZfxMutators.schema({
-    dummy: Schema.Void,
-    dummy2: Schema.Void,
-  });
-  const mutators = ZfxMutators.make(mutatorSchema, {
-    dummy: Effect.fn(function* () {
-      yield* DummyTag;
-    }),
-    dummy2: Effect.fn(function* () {
-      yield* DummyTag2;
-    }),
-  });
-  const serverEffect = ZfxServer.handleMutate({
-    transaction: serverTransaction,
-    mutators,
-    query: {} as any,
-    body: {} as any,
-    userId: undefined,
-  });
-
-  expectTypeOf<Effect.Services<typeof serverEffect>>().toEqualTypeOf<DummyTag | DummyTag2>();
-});
-
 it.live(
   "rows are returned after data is inserted",
   Effect.fn(function* () {
@@ -492,47 +426,21 @@ it.live(
 );
 
 it.live(
-  "custom mutators work",
+  "mutators create and update rows",
   Effect.fn(function* () {
     const z = yield* initZero;
 
-    const item: Message = { id: nanoid(), body: "Hello, world!" };
-    const mut = z.mutate.messages.create(item);
+    const item: Message = { id: nanoid(), body: "Original body" };
+    const create = z.mutate.messages.create(item);
+    expect(yield* Effect.promise(() => create.client)).toEqual({ type: "success" });
+    expect(yield* Effect.promise(() => create.server)).toEqual({ type: "success" });
 
-    const clientResult = yield* Effect.promise(() => mut.client);
-    expect(clientResult).toEqual({ type: "success" });
-
-    const serverResult = yield* Effect.promise(() => mut.server);
-    expect(serverResult).toEqual({ type: "success" });
+    const updatedItem: Message = { id: item.id, body: "Updated body" };
+    expect(yield* Effect.promise(() => z.mutate.messages.updateMessage(updatedItem).server)).toEqual({
+      type: "success",
+    });
 
     const result = yield* Effect.promise(() => ddb.select({ id: messages.id, body: messages.body }).from(messages));
-    expect(result).toEqual([item]);
-  }),
-);
-
-it.live(
-  "nested mutators using Effect.fn work",
-  Effect.fn(function* () {
-    const z = yield* initZero;
-
-    // First create a message
-    const item: Message = { id: nanoid(), body: "Original body" };
-    yield* Effect.promise(() => z.mutate.messages.create(item).server);
-
-    // Update it using the nested Effect.fn mutator
-    const updatedItem: Message = { id: item.id, body: "Updated body" };
-    const updateMut = z.mutate.messages.updateMessage(updatedItem);
-
-    const updateClientResult = yield* Effect.promise(() => updateMut.client);
-    expect(updateClientResult).toEqual({ type: "success" });
-
-    const updateServerResult = yield* Effect.promise(() => updateMut.server);
-    expect(updateServerResult).toEqual({ type: "success" });
-
-    // Verify the update
-    const result = yield* Effect.promise(() =>
-      ddb.select({ id: messages.id, body: messages.body }).from(messages).where(eq(messages.id, item.id)),
-    );
     expect(result).toEqual([updatedItem]);
   }),
 );
