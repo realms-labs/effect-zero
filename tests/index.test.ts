@@ -17,7 +17,22 @@ import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { Chunk, Console, Data, Duration, Effect, Latch, Layer, Logger, Option, pipe, Schema, Stream } from "effect";
+import {
+  Chunk,
+  Console,
+  Data,
+  Duration,
+  Effect,
+  Exit,
+  Latch,
+  Layer,
+  Logger,
+  Option,
+  pipe,
+  Schema,
+  Stream,
+  Tracer,
+} from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -218,6 +233,16 @@ const serverMutators = ZfxMutator.server(mutators, {
   }),
 });
 
+// Records every span the client and server create, to check the mutation tracing.
+const recordedSpans: Tracer.NativeSpan[] = [];
+const recordingTracer = Tracer.make({
+  span: (options) => {
+    const span = new Tracer.NativeSpan(options);
+    recordedSpans.push(span);
+    return span;
+  },
+});
+
 const builder = createBuilder(schema);
 
 const messageByIdQuery = ZfxQuery.make({
@@ -365,7 +390,7 @@ beforeAll(async () => {
       Layer.provide(NodeHttpServer.layer(() => createServer(), { port: 3000 })),
       Layer.tap(() => serverStarted.open),
     );
-    yield* Layer.launch(app).pipe(Effect.forkDetach);
+    yield* Layer.launch(app).pipe(Effect.withTracer(recordingTracer), Effect.forkDetach);
     yield* serverStarted.await;
   }).pipe(Effect.provide(FetchHttpClient.layer));
 
@@ -842,6 +867,53 @@ it.live(
       message: "error in throwsError",
     });
   }),
+);
+
+it.live(
+  "mutations are traced on the client and the server",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+    const before = recordedSpans.length;
+
+    const item: Message = { id: nanoid(), body: "traced" };
+    const mutation = yield* ZfxClient.mutate(z, mutators.messages.create(item)).pipe(Effect.withSpan("test.caller"));
+    yield* mutation.server;
+    // The mutation's span ends once both outcomes are recorded, in the background.
+    yield* Effect.sleep(Duration.millis(50));
+
+    const spans = recordedSpans.slice(before);
+    const caller = spans.find((span) => span.name === "test.caller")!;
+    const parent = spans.find((span) => span.name === "zero.mutation")!;
+    expect(Option.getOrThrow(parent.parent)).toBe(caller);
+    expect(Object.fromEntries(parent.attributes)).toMatchObject({
+      "zero.mutator": "messages.create",
+      "zero.clientID": z.clientID,
+      "zero.clientGroupID": yield* Effect.promise(() => z.clientGroupID),
+      // Whatever the connection state was when the write was sent, e.g. "connecting" for a new client.
+      "zero.connection.state": expect.any(String),
+    });
+    expect(parent.status._tag).toBe("Ended");
+    if (parent.status._tag === "Ended") expect(Exit.isSuccess(parent.status.exit)).toBe(true);
+    expect(spans.filter((span) => Option.getOrUndefined(span.parent) === parent).map((span) => span.name)).toEqual(
+      expect.arrayContaining(["zero.mutation.client", "zero.mutation.server"]),
+    );
+
+    // The client mutator's run and the server's handling of the same write share Zero's client and mutation IDs.
+    const body = spans.find(
+      (span) =>
+        span.name === "zero.mutator" &&
+        span.attributes.get("zero.clientID") === z.clientID &&
+        span.attributes.get("zero.mutation.reason") === "optimistic",
+    )!;
+    expect(body.attributes.get("zero.mutator")).toBe("messages.create");
+    const handle = spans.find(
+      (span) =>
+        span.name === "zero.mutation.handle" &&
+        span.attributes.get("zero.clientID") === z.clientID &&
+        span.attributes.get("zero.mutationID") === body.attributes.get("zero.mutationID"),
+    )!;
+    expect(handle.attributes.get("zero.mutator")).toBe("messages.create");
+  }, Effect.withTracer(recordingTracer)),
 );
 
 it.live(

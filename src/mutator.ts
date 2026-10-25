@@ -135,6 +135,14 @@ const makeMutator = <Type, Encoded, E, R>(
     Schema.decodeUnknownEffect(definition.payload)(args).pipe(
       Effect.catchTag("SchemaError", (error) => new ClientArgsParseError({ cause: Cause.fail(error) })),
       Effect.flatMap(definition.mutator),
+      Effect.withSpan("zero.mutator", {
+        attributes: {
+          "zero.mutator": name,
+          "zero.clientID": tx.clientID,
+          "zero.mutationID": tx.mutationID,
+          "zero.mutation.reason": tx.reason,
+        },
+      }),
       Effect.provideService(transaction[ContextSymbol], tx),
       Effect.asVoid,
     );
