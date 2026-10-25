@@ -1,4 +1,5 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
+import type { MutateRequest as ZeroMutateRequest } from "@rocicorp/zero";
 import { queryInternalsTag } from "@rocicorp/zero/bindings";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -74,15 +75,19 @@ describe("Type tests", () => {
       }),
     });
 
-    it("mutators take their decoded args", () => {
-      expectTypeOf<Parameters<typeof mutators.messages.create.mutator>>().toEqualTypeOf<
+    it("mutators take their decoded args and produce requests", () => {
+      expectTypeOf<Parameters<typeof mutators.messages.create>>().toEqualTypeOf<
         [{ readonly id: string; readonly body: string }]
       >();
       // A mutator without args is called without args.
-      expectTypeOf(mutators.messages.deleteAll.mutator).toBeCallableWith();
-      expectTypeOf<Parameters<typeof mutators.transformArgs.mutator>>().toEqualTypeOf<[{ readonly at: Date }]>();
+      mutators.messages.deleteAll();
+      expectTypeOf<Parameters<typeof mutators.transformArgs>>().toEqualTypeOf<[{ readonly at: Date }]>();
       const nullable = Mutator.make({ payload: Schema.NullOr(Schema.String), mutator: () => Effect.void });
       expectTypeOf<Parameters<typeof nullable.mutator>>().toEqualTypeOf<[string | null]>();
+
+      // A request is also a Zero `MutateRequest`, so `zero.mutate(request)` accepts it.
+      expectTypeOf(mutators.messages.create({ id: "1", body: "a" })).toExtend<ZeroMutateRequest<any, any, any, any>>();
+      expectTypeOf(mutators.messages.create.mutatorName).toEqualTypeOf<string>();
     });
 
     it("the registry's requirements propagate, without its client transaction", () => {

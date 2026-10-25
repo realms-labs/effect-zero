@@ -2,8 +2,8 @@
 
 ## Custom mutators
 
-You define each mutator once, with a payload codec and an Effect body, and register them. The client and the server
-share the registry.
+Mutators follow Zero's [mutation request model](https://zero.rocicorp.dev/docs/mutators): you define them once,
+register them, and run a mutation by calling a mutator to get a request.
 
 ### Defining mutators
 
@@ -26,7 +26,7 @@ const createTodo = ZfxMutator.make({
   }),
 });
 
-// Register the mutators, at the root or nested under namespaces
+// Mutators are named after their path in the registry, like Zero's `defineMutators`: "todo.create", "todo.toggle"
 export const mutators = ZfxMutator.registry(clientTransaction, {
   todo: {
     create: createTodo,
@@ -48,6 +48,7 @@ export const mutators = ZfxMutator.registry(clientTransaction, {
 ```
 
 > [!NOTE]
+> Calling a mutator encodes its args right away, so the payload must encode without services.
 > Zero stores and sends `undefined` mutator args as `null`, so a mutator may receive `null` where `undefined` was
 > passed. Use `Schema.Void` for mutators without arguments, and `Schema.NullOr(...)` (not `Schema.UndefinedOr(...)`)
 > for optional arguments.
@@ -137,6 +138,21 @@ export const createZero = Effect.fn(function* (opts: { userID: string; auth?: st
     kvStore: "idb", // or "mem" for in-memory
     // Zero's own logs go through Effect's logger; pass `logSink` to send them elsewhere
   });
+});
+```
+
+### Running mutations
+
+Calling a mutator encodes its args and returns a Zero mutation request, which `zero.mutate` runs, exactly as with
+Zero's own `defineMutators`:
+
+```ts
+const program = Effect.gen(function* () {
+  const zero = yield* createZero({ /* ... */ });
+
+  // Zero's result: `client` and `server` promises of Zero's result details
+  const result = zero.mutate(mutators.todo.create({ id: "1", title: "Write docs" }));
+  yield* Effect.promise(() => result.server);
 });
 ```
 
