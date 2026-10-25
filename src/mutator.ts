@@ -24,15 +24,16 @@ export const RegistryTypeId = Symbol.for(prefixId("MutatorRegistry"));
 
 /**
  * A mutator that isn't part of a registry yet, made with {@link make}. Like `defineMutator`, it gets its name
- * from its path in the {@link registry}.
+ * from its path in the {@link registry}. `R` is the services its body requires, and `RD` the services decoding its
+ * payload requires.
  */
-export interface Definition<Type, Encoded, E, R> {
-  readonly payload: Schema.Codec<Type, Encoded, R>;
+export interface Definition<Type, Encoded, E, R, RD = never> {
+  readonly payload: Schema.Codec<Type, Encoded, RD>;
   readonly mutator: (args: Type) => Effect.Effect<unknown, E, R>;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
-export type AnyDefinition = Definition<any, any, any, any>;
+export type AnyDefinition = Definition<any, any, any, any, any>;
 
 export type Definitions = { readonly [key: string]: AnyDefinition | Definitions };
 
@@ -40,7 +41,7 @@ export type Definitions = { readonly [key: string]: AnyDefinition | Definitions 
  * A registered mutator. Calling it encodes `args` and returns a request for `ZfxClient.mutate(zero, request)`, or
  * for Zero's own `zero.mutate(request)`. It is also a Zero `Mutator`, so the registry can be passed to Zero.
  */
-export interface Mutator<Type, Encoded, E, R> extends Definition<Type, Encoded, E, R> {
+export interface Mutator<Type, Encoded, E, R, RD = never> extends Definition<Type, Encoded, E, R, RD> {
   (args: Type): MutateRequest<Type>;
   readonly mutatorName: string;
   /** Runs the mutator for Zero, which calls it with the transaction and the `context` from `ZfxClient.make`. */
@@ -53,7 +54,7 @@ export interface Mutator<Type, Encoded, E, R> extends Definition<Type, Encoded, 
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: upper bound to allow everything
-export type AnyMutator = Mutator<any, any, any, any>;
+export type AnyMutator = Mutator<any, any, any, any, any>;
 
 /** A request to run a mutator, for `ZfxClient.mutate` or Zero's own `zero.mutate`. */
 // biome-ignore lint/suspicious/noExplicitAny: compatible with any Zero instance's `zero.mutate`
@@ -63,8 +64,8 @@ export type MutateRequest<Type> = ZeroMutateRequest<any, any, any, any> & {
 };
 
 type Tree<D> = {
-  readonly [K in keyof D]: D[K] extends Definition<infer Type, infer Encoded, infer E, infer R>
-    ? Mutator<Type, Encoded, E, R>
+  readonly [K in keyof D]: D[K] extends Definition<infer Type, infer Encoded, infer E, infer R, infer RD>
+    ? Mutator<Type, Encoded, E, R, RD>
     : Tree<D[K]>;
 };
 
@@ -82,10 +83,10 @@ type AnyClientTransaction = ClientTransaction.Context<any>;
 
 type Keys<T> = Exclude<Extract<keyof T, string>, "~">;
 
-/** The services a registry's mutators require. */
+/** The services a registry's mutators require: their bodies' and their payloads'. */
 // biome-ignore lint/suspicious/noExplicitAny: matches any mutator
-export type Requirements<T> = T extends Mutator<any, any, any, infer R>
-  ? R
+export type Requirements<T> = T extends Mutator<any, any, any, infer R, infer RD>
+  ? R | RD
   : { [K in Keys<T>]: Requirements<T[K]> }[Keys<T>];
 
 /** The client transaction a registry's mutators run in. */
@@ -101,7 +102,7 @@ export type ZeroSchemaOf<T extends AnyRegistry> = Transaction<T> extends ClientT
 export const make = <Type, Encoded, RD = never, A = unknown, E = never, R = never>(options: {
   readonly payload: Schema.Codec<Type, Encoded, RD, never>;
   readonly mutator: (args: NoInfer<Type>) => Effect.Effect<A, E, R>;
-}): Definition<Type, Encoded, E, R | RD> => options;
+}): Definition<Type, Encoded, E, R, RD> => options;
 
 /**
  * Registers mutators under their path, like Zero's `defineMutators`: `{ todo: { create } }` registers
@@ -126,11 +127,11 @@ export const registry = <TTransaction extends AnyClientTransaction, const D exte
 const isDefinition = (u: unknown): u is AnyDefinition =>
   Predicate.hasProperty(u, "payload") && Schema.isSchema(u.payload);
 
-const makeMutator = <Type, Encoded, E, R>(
+const makeMutator = <Type, Encoded, E, R, RD>(
   transaction: AnyClientTransaction,
   name: string,
-  definition: Definition<Type, Encoded, E, R>,
-): Mutator<Type, Encoded, E, R> => {
+  definition: Definition<Type, Encoded, E, R, RD>,
+): Mutator<Type, Encoded, E, R, RD> => {
   const run = (args: unknown, tx: ZeroTransaction<ZeroSchema>) =>
     Schema.decodeUnknownEffect(definition.payload)(args).pipe(
       Effect.catchTag("SchemaError", (error) => new ClientArgsParseError({ cause: Cause.fail(error) })),
@@ -147,7 +148,7 @@ const makeMutator = <Type, Encoded, E, R>(
       Effect.asVoid,
     );
 
-  const mutator: Mutator<Type, Encoded, E, R> = Object.assign(
+  const mutator: Mutator<Type, Encoded, E, R, RD> = Object.assign(
     (args: Type) =>
       // A Zero `MutateRequest`, whose brand only exists at the type level.
       ({ mutator, args: Schema.encodeSync(definition.payload)(args), "~": "MutateRequest" }) as MutateRequest<Type>,
@@ -166,7 +167,7 @@ const makeMutator = <Type, Encoded, E, R>(
       }) =>
         Context.isContext(ctx)
           ? // `ZfxClient.make` passes the services it captured, which cover every mutator's requirements.
-            run(args, tx).pipe(Effect.runPromiseWith(ctx as Context.Context<R>))
+            run(args, tx).pipe(Effect.runPromiseWith(ctx as Context.Context<R | RD>))
           : Promise.reject(new MutatorContextNotFound({ mutator: name })),
     },
   );
@@ -174,7 +175,7 @@ const makeMutator = <Type, Encoded, E, R>(
 };
 
 type Overrides<T> = {
-  readonly [K in Keys<T>]?: T[K] extends Mutator<infer Type, infer _Encoded, infer _E, infer _R>
+  readonly [K in Keys<T>]?: T[K] extends Mutator<infer Type, infer _Encoded, infer _E, infer _R, infer _RD>
     ? // biome-ignore lint/suspicious/noExplicitAny: any server implementation
       (args: Type) => Effect.Effect<unknown, any, any>
     : Overrides<T[K]>;
@@ -199,11 +200,14 @@ export const server = <TRegistry extends AnyRegistry, const O extends Overrides<
   overrides: O,
 ): ServerMutators<TRegistry, O> => ({ registry, overrides });
 
+// biome-ignore lint/suspicious/noExplicitAny: matches any mutator
+type PayloadRequirements<T> = T extends Mutator<any, any, any, any, infer RD> ? RD : never;
+
 type ServerTreeRequirements<T, O, ClientTransactionId> = {
   [K in Keys<T>]: T[K] extends AnyMutator
     ? K extends keyof O
       ? O[K] extends (args: never) => Effect.Effect<infer _A, infer _E, infer R>
-        ? R
+        ? R | PayloadRequirements<T[K]>
         : never
       : Exclude<Requirements<T[K]>, ClientTransactionId>
     : ServerTreeRequirements<T[K], K extends keyof O ? O[K] : unknown, ClientTransactionId>;
@@ -211,7 +215,7 @@ type ServerTreeRequirements<T, O, ClientTransactionId> = {
 
 /**
  * The services the server needs to run these mutators. Mutators that aren't overridden run in a server transaction,
- * which provides their client transaction.
+ * which provides their client transaction. Every mutator's payload is decoded on the server, overridden or not.
  */
 export type ServerRequirements<T extends AnyServerMutators> = T extends ServerMutators<infer TRegistry, infer O>
   ? ServerTreeRequirements<TRegistry, O, Transaction<TRegistry>[typeof ContextSymbol]["Identifier"]>

@@ -141,6 +141,47 @@ describe("Type tests", () => {
       expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<DummyTag2>();
     });
 
+    it("a payload decodes without its body's services", () => {
+      const decoded = Schema.decodeUnknownEffect(mutators.messages.deleteAll.payload)(undefined);
+      expectTypeOf<Effect.Services<typeof decoded>>().toEqualTypeOf<never>();
+    });
+
+    it("a payload's services are required, even when its mutator is overridden", () => {
+      const CheckedString = Schema.String.pipe(
+        Schema.decodeTo(Schema.String, {
+          decode: SchemaGetter.checkEffect(() =>
+            Effect.gen(function* () {
+              yield* DummyTag2;
+              return undefined;
+            }),
+          ),
+          encode: SchemaGetter.passthrough(),
+        }),
+      );
+      const checked = Mutator.registry(clientTransaction, {
+        checked: Mutator.make({
+          payload: CheckedString,
+          mutator: Effect.fn(function* () {
+            yield* DummyTag;
+          }),
+        }),
+      });
+
+      const decoded = Schema.decodeUnknownEffect(checked.checked.payload)("a");
+      expectTypeOf<Effect.Services<typeof decoded>>().toEqualTypeOf<DummyTag2>();
+      expectTypeOf<Mutator.Requirements<typeof checked>>().toEqualTypeOf<DummyTag | DummyTag2>();
+
+      const effect = Server.handleMutate({
+        transaction: serverTransaction,
+        mutators: Mutator.server(checked, { checked: () => Effect.void }),
+        query: {} as any,
+        body: {} as any,
+        userId: undefined,
+      });
+      // The override drops DummyTag, but the server still decodes the payload.
+      expectTypeOf<Effect.Services<typeof effect>>().toEqualTypeOf<DummyTag2>();
+    });
+
     it("handleMutate has no extra requirements when mutators have none", () => {
       const simple = Mutator.registry(clientTransaction, {
         simple: Mutator.make({
