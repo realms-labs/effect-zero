@@ -20,7 +20,7 @@ import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
 import { TransactCallbackNotInvokedError, TransactInternalError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
-import * as Mutators from "./mutators.js";
+import type * as Mutator from "./mutator.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
 import type * as ServerTransaction from "./server-transaction.js";
 import { DatabaseSymbol, ServerTransactionCallbackSymbol } from "./server-transaction.js";
@@ -41,10 +41,11 @@ type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 type MutateUserId = Extract<Awaited<ReturnType<typeof handleMutateRequest>>, { kind: "MutateResponse" }>["userID"];
 type QueryUserId = Extract<Awaited<ReturnType<typeof handleQueryRequest>>, { kind: "QueryResponse" }>["userID"];
 
+/** Handles Zero's push endpoint, running each mutation's server implementation from `ZfxMutator.server`. */
 export const handleMutate = Effect.fn(function* <
   TSchema extends ZeroSchema,
   TTransaction,
-  TMutators extends Mutators.AnyMutators,
+  TMutators extends Mutator.AnyServerMutators,
 >({
   transaction,
   mutators,
@@ -61,7 +62,7 @@ export const handleMutate = Effect.fn(function* <
   const ctx =
     yield* Effect.context<
       Exclude<
-        Mutators.ExtractMutatorsRequirements<TMutators>,
+        Mutator.ServerRequirements<TMutators>,
         | (typeof transaction)[typeof ServerTransactionCallbackSymbol]["Identifier"]
         | ServerSynchronizationContext.ServerSynchronizationContext
       >
@@ -100,9 +101,7 @@ export const handleMutate = Effect.fn(function* <
               );
             }, ServerSynchronizationContext.guard);
 
-            const exit: Exit.Exit<unknown, unknown> = yield* runMutation<
-              Mutators.ExtractMutatorsRequirements<TMutators>
-            >(mutators, mutation).pipe(
+            const exit: Exit.Exit<unknown, unknown> = yield* runMutation(mutators, mutation).pipe(
               ServerSynchronizationContext.finalize,
               Effect.provide([
                 Layer.succeed(transaction[ServerTransactionCallbackSymbol], { transact }),
@@ -137,30 +136,36 @@ export const handleMutate = Effect.fn(function* <
   });
 });
 
-/** Mutators, at the root or nested under namespaces. */
-type MutatorTree<R> = Mutators.AnyMutator<R> | { readonly [key: string]: MutatorTree<R> };
-
 /**
- * Runs a mutation. Like upstream, names are split on "." or "|" (the separator of Zero's legacy custom mutators), at
- * any depth.
+ * Runs a mutation's server implementation. Like upstream, names are split on "." or "|" (the separator of Zero's legacy
+ * custom mutators), at any depth. Their services aren't tracked from here on: `handleMutate` already requires every
+ * implementation's.
  */
-const runMutation = Effect.fn(function* <R>(mutators: Mutators.AnyMutators<R>, mutation: Mutation) {
-  const mutator = yield* Arr.reduce(
-    Str.split(mutation.name, /[.|]/),
-    Option.some<MutatorTree<R>>(mutators),
-    (tree, key) =>
-      // A mutator is a leaf: only a namespace has keys to walk into.
-      tree.pipe(Option.flatMap((node) => (Predicate.isFunction(node) ? Option.none() : Rec.get(node, key)))),
-  ).pipe(
-    Option.filter((node) => Predicate.isFunction(node)),
+const runMutation = Effect.fn(function* (mutators: Mutator.AnyServerMutators, mutation: Mutation) {
+  const { registry, implementations } = Rec.map(mutators, (root) =>
+    Arr.reduce(Str.split(mutation.name, /[.|]/), Option.some(root), (tree, key) =>
+      // Only an object has keys to walk into; the checks below make sure the walk ended at a mutator.
+      tree.pipe(Option.filter(Predicate.isObject), Option.flatMap(Rec.get(key))),
+    ),
+  );
+  const mutator = yield* registry.pipe(
+    Option.filter(
+      (u): u is Mutator.Definition<unknown, unknown, unknown, never> =>
+        Predicate.hasProperty(u, "payload") && Schema.isSchema(u.payload),
+    ),
     Effect.fromOption(() => new MutatorNotFoundError({ name: mutation.name })),
   );
 
-  const args = yield* Schema.decodeUnknownEffect(mutator[Mutators.MutatorSchemaSymbol])(mutation.args[0]).pipe(
+  const args = yield* Schema.decodeUnknownEffect(mutator.payload)(mutation.args[0]).pipe(
     Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
   );
 
-  return yield* mutator(args);
+  const run = yield* implementations.pipe(
+    Option.filter((u): u is (args: unknown) => Effect.Effect<unknown, unknown> => Predicate.isFunction(u)),
+    Effect.fromOption(() => new MutatorNotFoundError({ name: mutation.name })),
+  );
+
+  return yield* run(args);
 });
 
 export const makeApplicationError = (cause: Cause.Cause<unknown>) => {
