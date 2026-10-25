@@ -17,7 +17,7 @@ import { createBuilder } from "@rocicorp/zero";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { Chunk, Console, Duration, Effect, Latch, Layer, Logger, Option, pipe, Schema, Stream } from "effect";
+import { Chunk, Console, Data, Duration, Effect, Latch, Layer, Logger, Option, pipe, Schema, Stream } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
@@ -65,6 +65,8 @@ const transformArgsServer = vi.fn(
     return a;
   }),
 );
+
+class Unauthorized extends Data.TaggedError("Unauthorized") {}
 
 const noop = ZfxMutator.make({ payload: Schema.Void, mutator: Effect.fn(function* () {}) });
 
@@ -115,6 +117,12 @@ const mutators = ZfxMutator.registry(clientTransaction, {
     mutator: Effect.fn(function* () {
       yield* Effect.void;
       throw new Error("client error");
+    }),
+  }),
+  clientYieldsError: ZfxMutator.make({
+    payload: Schema.Void,
+    mutator: Effect.fn(function* () {
+      return yield* new Unauthorized();
     }),
   }),
   yieldsError: noop,
@@ -768,6 +776,71 @@ it.live(
     // PushFailed reason:"database" (only OutOfOrderMutation is passed through to upstream's top-level handler).
     const result = yield* Effect.promise(() => z.mutate(mutators.rawInsertDuplicate(id)).server);
     expect(result).toMatchObject({ type: "error", error: { type: "app" } });
+  }),
+);
+
+it.live(
+  "ZfxClient.mutate settles the client and server outcomes independently",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const item: Message = { id: nanoid(), body: "independent" };
+    const mutation = yield* ZfxClient.mutate(z, mutators.messages.create(item));
+
+    // Either outcome can be awaited first, and awaiting again doesn't send the mutation again.
+    yield* mutation.server;
+    yield* mutation.client;
+    yield* mutation.server;
+
+    const result = yield* Effect.promise(() => ddb.select({ id: messages.id, body: messages.body }).from(messages));
+    expect(result).toEqual([item]);
+  }),
+);
+
+it.live(
+  "ZfxClient.mutate fails both outcomes with Zero's error when the client mutator fails",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const mutation = yield* ZfxClient.mutate(z, mutators.clientYieldsError());
+
+    const clientError = yield* Effect.flip(mutation.client);
+    // As in Zero, the client mutator's error survives as its name in the details.
+    expect(clientError).toMatchObject({
+      _tag: "MutationError",
+      mutator: "clientYieldsError",
+      origin: "client",
+      type: "app",
+      details: { name: "Unauthorized" },
+    });
+
+    // The mutation was never pushed, so the server outcome reports the client's failure.
+    const serverError = yield* Effect.flip(mutation.server);
+    expect(serverError).toMatchObject({
+      _tag: "MutationError",
+      mutator: "clientYieldsError",
+      origin: "client",
+      type: "app",
+    });
+  }),
+);
+
+it.live(
+  "ZfxClient.mutate fails the server outcome when the server rejects the mutation",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const mutation = yield* ZfxClient.mutate(z, mutators.throwsError());
+
+    yield* mutation.client;
+    const serverError = yield* Effect.flip(mutation.server);
+    expect(serverError).toMatchObject({
+      _tag: "MutationError",
+      mutator: "throwsError",
+      origin: "server",
+      type: "app",
+      message: "error in throwsError",
+    });
   }),
 );
 
