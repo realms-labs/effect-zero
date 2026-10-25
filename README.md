@@ -75,7 +75,8 @@ const database = zeroPostgresJS(schema, postgres(process.env.ZERO_UPSTREAM_DB!))
 // The "server-side" transaction. Passing the client transaction lets mutators' shared bodies run on the server.
 const serverTransaction = ZfxServerTransaction.make("ServerTransaction", database, clientTransaction);
 
-// Every mutator's server implementation. It runs outside the transaction, so it can do work before and after it.
+// On the server, every mutator runs its shared body in a server transaction, unless it's overridden here
+// (pass `{}` if nothing is). An override runs outside the transaction, so it can do work before and after it.
 export const serverMutators = ZfxMutator.server(mutators, {
   todo: {
     create: Effect.fn(function* (args) {
@@ -88,8 +89,6 @@ export const serverMutators = ZfxMutator.server(mutators, {
       // after the transaction
       yield* Effect.log("after the transaction");
     }),
-    toggle: (args) => mutators.todo.toggle.mutator(args).pipe(serverTransaction.execute),
-    clear: () => mutators.todo.clear.mutator().pipe(serverTransaction.execute),
   },
 });
 

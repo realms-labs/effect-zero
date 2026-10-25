@@ -41,7 +41,10 @@ type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
 type MutateUserId = Extract<Awaited<ReturnType<typeof handleMutateRequest>>, { kind: "MutateResponse" }>["userID"];
 type QueryUserId = Extract<Awaited<ReturnType<typeof handleQueryRequest>>, { kind: "QueryResponse" }>["userID"];
 
-/** Handles Zero's push endpoint, running each mutation's server implementation from `ZfxMutator.server`. */
+/**
+ * Handles Zero's push endpoint, running each mutation's server implementation: its override from
+ * `ZfxMutator.server`, or else its shared body in a server transaction.
+ */
 export const handleMutate = Effect.fn(function* <
   TSchema extends ZeroSchema,
   TTransaction,
@@ -101,7 +104,7 @@ export const handleMutate = Effect.fn(function* <
               );
             }, ServerSynchronizationContext.guard);
 
-            const exit: Exit.Exit<unknown, unknown> = yield* runMutation(mutators, mutation).pipe(
+            const exit: Exit.Exit<unknown, unknown> = yield* runMutation(mutators, transaction, mutation).pipe(
               ServerSynchronizationContext.finalize,
               Effect.provide([
                 Layer.succeed(transaction[ServerTransactionCallbackSymbol], { transact }),
@@ -137,12 +140,16 @@ export const handleMutate = Effect.fn(function* <
 });
 
 /**
- * Runs a mutation's server implementation. Like upstream, names are split on "." or "|" (the separator of Zero's legacy
- * custom mutators), at any depth. Their services aren't tracked from here on: `handleMutate` already requires every
- * implementation's.
+ * Runs a mutation: its override if it has one, or else its shared body in a server transaction. Like upstream, names
+ * are split on "." or "|" (the separator of Zero's legacy custom mutators), at any depth. Their services aren't tracked
+ * from here on: `handleMutate` already requires every implementation's.
  */
-const runMutation = Effect.fn(function* (mutators: Mutator.AnyServerMutators, mutation: Mutation) {
-  const { registry, implementations } = Rec.map(mutators, (root) =>
+const runMutation = Effect.fn(function* <TSchema extends ZeroSchema, TTransaction>(
+  mutators: Mutator.AnyServerMutators,
+  transaction: ServerTransaction.Context<TSchema, TTransaction>,
+  mutation: Mutation,
+) {
+  const { registry, overrides } = Rec.map(mutators, (root) =>
     Arr.reduce(Str.split(mutation.name, /[.|]/), Option.some(root), (tree, key) =>
       // Only an object has keys to walk into; the checks below make sure the walk ended at a mutator.
       tree.pipe(Option.filter(Predicate.isObject), Option.flatMap(Rec.get(key))),
@@ -160,12 +167,13 @@ const runMutation = Effect.fn(function* (mutators: Mutator.AnyServerMutators, mu
     Effect.catchTag("SchemaError", (e) => Effect.fail(new ServerArgsParseError({ cause: Cause.fail(e) }))),
   );
 
-  const run = yield* implementations.pipe(
+  return yield* overrides.pipe(
     Option.filter((u): u is (args: unknown) => Effect.Effect<unknown, unknown> => Predicate.isFunction(u)),
-    Effect.fromOption(() => new MutatorNotFoundError({ name: mutation.name })),
+    Option.match({
+      onNone: () => transaction.execute(mutator.mutator(args)),
+      onSome: (run) => run(args),
+    }),
   );
-
-  return yield* run(args);
 });
 
 export const makeApplicationError = (cause: Cause.Cause<unknown>) => {
