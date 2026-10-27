@@ -254,6 +254,8 @@ const getTodoById = Effect.fn(function* (id: string) {
 });
 ```
 
+Each `ZfxQuery.stream` subscription is traced with a `zero.query` span, which runs until the query's first sync.
+
 ### Usage with [effect-atom](https://github.com/tim-smart/effect-atom)
 
 You might want to create atoms with query results. To do that, you can implement a `queryAtom` helper like this:

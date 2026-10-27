@@ -14,10 +14,12 @@ import { beforeEach } from "node:test";
 import { NodeHttpServer } from "@effect/platform-node";
 import { beforeAll, expect, expectTypeOf, it, test, vi } from "@effect/vitest";
 import { createBuilder } from "@rocicorp/zero";
+import { asQueryInternals } from "@rocicorp/zero/bindings";
 import { zeroDrizzle } from "@rocicorp/zero/server/adapters/drizzle";
 import { count, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import {
+  Cause,
   Chunk,
   Console,
   Data,
@@ -913,6 +915,95 @@ it.live(
         span.attributes.get("zero.mutationID") === body.attributes.get("zero.mutationID"),
     )!;
     expect(handle.attributes.get("zero.mutator")).toBe("messages.create");
+  }, Effect.withTracer(recordingTracer)),
+);
+
+it.live(
+  "queries are traced until their first complete result",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+    const before = recordedSpans.length;
+
+    const item: Message = { id: nanoid(), body: "traced query" };
+    yield* Effect.promise(() => ddb.insert(messages).values(item));
+    const q = yield* messageByIdQuery(item.id);
+    const querySpan = () => recordedSpans.slice(before).find((span) => span.name === "zero.query");
+    // Reads the span's status while the stream still runs, so this checks that the complete result ended it.
+    const status = yield* ZfxQuery.stream(z, q).pipe(
+      Stream.filter((result) => Predicate.isTagged(result, "Complete") && result.value?.id === item.id),
+      Stream.map(() => querySpan()?.status),
+      Stream.runHead,
+      Effect.flatMap(Effect.fromOption),
+      Effect.timeout(Duration.seconds(10)),
+      Effect.withSpan("test.caller"),
+    );
+
+    const span = querySpan()!;
+    const caller = recordedSpans.slice(before).find((span) => span.name === "test.caller")!;
+    expect(Option.getOrThrow(span.parent)).toBe(caller);
+    expect(Object.fromEntries(span.attributes)).toEqual({
+      "zero.query.name": "messageById",
+      "zero.query.hash": asQueryInternals(q).hash(),
+      "zero.clientID": z.clientID,
+    });
+    expect(status).toMatchObject({ _tag: "Ended", exit: Exit.void });
+    // The row is the first data, whether it came from the local store or with the server's complete result.
+    expect(span.events).toEqual([
+      [
+        "zero.query.first_data",
+        expect.any(BigInt),
+        { "zero.query.result_type": expect.stringMatching(/^(unknown|complete)$/), "zero.query.rows": 1 },
+      ],
+    ]);
+  }, Effect.withTracer(recordingTracer)),
+);
+
+it.live(
+  "a query's span is interrupted when its subscriber stops first",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+    const before = recordedSpans.length;
+
+    // Zero answers a new list query from the local store first: `[]`, which isn't data yet.
+    const q = yield* ZfxQuery.make({
+      name: "noMessages",
+      payload: Schema.Void,
+      query: () => Effect.succeed(builder.messages.where("id", nanoid()).limit(1)),
+    })();
+    const first = yield* ZfxQuery.stream(z, q).pipe(Stream.runHead, Effect.flatMap(Effect.fromOption));
+
+    const span = recordedSpans.slice(before).find((span) => span.name === "zero.query")!;
+    expect(first).toMatchObject({ _tag: "Partial", value: [] });
+    const exit = span.status._tag === "Ended" ? span.status.exit : undefined;
+    expect(exit && Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    expect(span.events).toEqual([]);
+  }, Effect.withTracer(recordingTracer)),
+);
+
+it.live(
+  "a query's span fails with its error result",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+    const before = recordedSpans.length;
+
+    // The server doesn't know this query, so it answers with an error result.
+    const q = yield* ZfxQuery.make({
+      name: "unknownQuery",
+      payload: Schema.Void,
+      query: () => Effect.succeed(builder.messages.limit(1)),
+    })();
+    const result = yield* ZfxQuery.stream(z, q).pipe(
+      Stream.filter((result) => Predicate.isTagged(result, "Error")),
+      Stream.runHead,
+      Effect.flatMap(Effect.fromOption),
+      Effect.timeout(Duration.seconds(10)),
+    );
+
+    const span = recordedSpans.slice(before).find((span) => span.name === "zero.query")!;
+    const exit = span.status._tag === "Ended" ? span.status.exit : undefined;
+    expect(exit && Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(
+      new ZfxResult.QueryError({ details: result.details }),
+    );
   }, Effect.withTracer(recordingTracer)),
 );
 
