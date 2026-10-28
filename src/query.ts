@@ -1,14 +1,21 @@
 import type { HumanReadable, ReadonlyJSONValue, Zero, Query as ZeroQuery, Schema as ZeroSchema } from "@rocicorp/zero";
 import { asQueryInternals } from "@rocicorp/zero/bindings";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as Exit from "effect/Exit";
 import * as Hash from "effect/Hash";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
+import { QueryError } from "./result.js";
 import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
 // biome-ignore lint/suspicious/noConfusingVoidType: necessary to allow Schema.Void
@@ -78,11 +85,30 @@ export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   typeof make<string, any, any, string, ZeroSchema, Record<string, any> | undefined, E, R1, R2>
 >;
 
+/**
+ * Streams a query's results. Each subscription is traced: a `zero.query` span runs from subscribing until the query's
+ * first complete result, which for rows this client hasn't synced yet is zero-cache's first sync of the query. Its
+ * `zero.query.first_data` event marks the first result with rows (or the complete result, if that comes first), which
+ * may come from the client's local store before the server confirms it. An error result fails the span with its
+ * `QueryError`, and a subscriber that stops first interrupts it.
+ */
 export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   zero: Zero<S>,
   query: ZeroQuery<T, S, R>,
 ) =>
   Effect.gen(function* () {
+    const internals = asQueryInternals(query);
+    // Closed by the first complete or error result, or as interrupted when the stream ends first.
+    const spanScope = yield* Effect.acquireRelease(Scope.make(), (scope, exit) =>
+      Scope.close(scope, Exit.isSuccess(exit) ? Exit.interrupt() : exit),
+    );
+    const span = yield* Effect.makeSpanScoped("zero.query", {
+      attributes: {
+        "zero.query.hash": internals.hash(),
+        "zero.clientID": zero.clientID,
+        ...Rec.getSomes({ "zero.query.name": Option.fromNullishOr(internals.customQueryID?.name) }),
+      },
+    }).pipe(Scope.provide(spanScope));
     const view = yield* Effect.acquireRelease(
       Effect.sync(() => zero.materialize(query)),
       (view) => Effect.sync(() => view.destroy()),
@@ -96,7 +122,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
           // logic here borrowed from: https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/zero-react/src/use-query.tsx#L543
           const cloned = data === undefined ? data : (deepClone(data as ReadonlyJSONValue) as HumanReadable<R>);
           return getSnapshot<R>(
-            asQueryInternals(query).format.singular,
+            internals.format.singular,
             cloned,
             resultType,
             // TODO: Look into this. It seems like this is difficult but not impossible to model in the Effect paradigm.
@@ -108,6 +134,29 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
         }),
       ),
       Stream.map(QueryResult.make),
+      // Records `first_data` once: at the first result with rows, or the complete result if that comes first. The
+      // state is whether that's settled, which an error result (ending the span) also does.
+      Stream.mapAccumEffect(
+        () => false,
+        Effect.fnUntraced(function* (settled, result) {
+          if (settled || Predicate.isTagged(result, "Error")) return [true, [result]] as const;
+          // A list's length, or 0 or 1 for a singular query's optional row.
+          const rows = Array.isArray(result.value) ? result.value.length : Predicate.isUndefined(result.value) ? 0 : 1;
+          if (Predicate.isTagged(result, "Partial") && rows === 0) return [false, [result]] as const;
+          span.event("zero.query.first_data", yield* Clock.currentTimeNanos, {
+            "zero.query.result_type": Match.valueTags(result, { Partial: () => "unknown", Complete: () => "complete" }),
+            "zero.query.rows": rows,
+          });
+          return [true, [result]] as const;
+        }),
+      ),
+      Stream.tap(
+        Match.valueTags({
+          Partial: () => Effect.void,
+          Complete: () => Scope.close(spanScope, Exit.void),
+          Error: ({ details }) => Scope.close(spanScope, Exit.fail(new QueryError({ details }))),
+        }),
+      ),
     );
   }).pipe(Stream.unwrap);
 
