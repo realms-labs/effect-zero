@@ -1,4 +1,5 @@
 import {
+  type ConnectionState,
   type MutatorResultDetails,
   type MutatorResultErrorDetails,
   type MutatorResultSuccessDetails,
@@ -16,8 +17,10 @@ import type * as LogLevel from "effect/LogLevel";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Queue from "effect/Queue";
 import * as Rec from "effect/Record";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type * as Tracer from "effect/Tracer";
 import type * as Unify from "effect/Unify";
 import { type ContextSymbol, SchemaSymbol } from "./client-transaction.js";
@@ -44,7 +47,7 @@ export const make = Effect.fn(function* <TRegistry extends Mutator.AnyRegistry>(
       Exclude<Mutator.Requirements<TRegistry>, Mutator.Transaction<TRegistry>[typeof ContextSymbol]["Identifier"]>
     >();
 
-  return yield* Effect.acquireRelease(
+  const zero = yield* Effect.acquireRelease(
     Effect.sync(
       () =>
         new Zero<Mutator.ZeroSchemaOf<TRegistry>>({
@@ -73,6 +76,37 @@ export const make = Effect.fn(function* <TRegistry extends Mutator.AnyRegistry>(
     ),
     (zero) => Effect.promise(() => zero.close()),
   );
+
+  // Spans the client's startup, opening its local store and connecting to zero-cache, until its first state other
+  // than `connecting`: `connected`, or whichever state ended the attempt.
+  yield* Stream.callback<ConnectionState>((queue) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        // `subscribe` doesn't replay the current state.
+        Queue.offerUnsafe(queue, zero.connection.state.current);
+        return zero.connection.state.subscribe((state) => Queue.offerUnsafe(queue, state));
+      }),
+      (unsubscribe) => Effect.sync(unsubscribe),
+    ),
+  ).pipe(
+    Stream.filter((state) => state.name !== "connecting"),
+    Stream.take(1),
+    Stream.runForEach((state) => Effect.annotateCurrentSpan(connectionAttributes(state))),
+    Effect.withSpan("zero.client.connect", { attributes: { "zero.clientID": zero.clientID } }),
+    Effect.forkScoped({ startImmediately: true }),
+  );
+
+  return zero;
+});
+
+/** A connection state as span attributes. */
+const connectionAttributes = (state: ConnectionState) => ({
+  "zero.connection.state": state.name,
+  ...Rec.getSomes({
+    "zero.connection.reason": Option.fromNullishOr(
+      Predicate.hasProperty(state, "reason") ? state.reason : undefined,
+    ).pipe(Option.map((reason) => (Predicate.isString(reason) ? reason : reason.type))),
+  }),
 });
 
 /** A mutation sent with {@link mutate}. Its client and server outcomes settle independently. */
@@ -94,19 +128,13 @@ export const mutate = Effect.fn(function* <Type>(
   request: Mutator.MutateRequest<Type>,
 ) {
   const mutator = request.mutator.mutatorName;
-  const connection = zero.connection.state.current;
   // The span outlives this call: it ends when this scope closes, once both outcomes are known.
   const scope = yield* Scope.make();
   const span = yield* Effect.makeSpanScoped("zero.mutation", {
     attributes: {
       "zero.mutator": mutator,
       "zero.clientID": zero.clientID,
-      "zero.connection.state": connection.name,
-      ...Rec.getSomes({
-        "zero.connection.reason": Option.fromNullishOr("reason" in connection ? connection.reason : undefined).pipe(
-          Option.map((reason) => (Predicate.isString(reason) ? reason : reason.type)),
-        ),
-      }),
+      ...connectionAttributes(zero.connection.state.current),
     },
   }).pipe(Scope.provide(scope));
 

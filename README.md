@@ -140,6 +140,8 @@ export const createZero = Effect.fn(function* (opts: { userID: string; auth?: st
 });
 ```
 
+`ZfxClient.make` traces the client's startup with a `zero.client.connect` span, which runs until it connects.
+
 ### Running mutations
 
 ```ts

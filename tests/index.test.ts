@@ -31,6 +31,7 @@ import {
   Logger,
   Option,
   pipe,
+  Schedule,
   Schema,
   Stream,
   Tracer,
@@ -1004,6 +1005,38 @@ it.live(
     expect(exit && Exit.isFailure(exit) ? Cause.squash(exit.cause) : exit).toEqual(
       new ZfxResult.QueryError({ details: result.details }),
     );
+  }, Effect.withTracer(recordingTracer)),
+);
+
+it.live(
+  "clients are traced until they connect",
+  Effect.fn(function* () {
+    const before = recordedSpans.length;
+    const z = yield* ZfxClient.make(mutators, {
+      userID: null,
+      server: "http://localhost:4848",
+      mutateURL: "http://localhost:3000/push",
+      queryURL: "http://localhost:3000/query",
+    }).pipe(Effect.withSpan("test.caller"));
+    // The span starts while making the client.
+    expect(recordedSpans.slice(before).map((span) => span.name)).toContain("zero.client.connect");
+
+    // The span ends once the client connects.
+    const span = yield* Effect.sync(() =>
+      recordedSpans.slice(before).find((span) => span.name === "zero.client.connect" && span.status._tag === "Ended"),
+    ).pipe(
+      Effect.flatMap(Effect.fromNullishOr),
+      Effect.retry(Schedule.spaced(Duration.millis(10))),
+      Effect.timeout(Duration.seconds(10)),
+    );
+
+    const caller = recordedSpans.slice(before).find((span) => span.name === "test.caller")!;
+    expect(Option.getOrThrow(span.parent)).toBe(caller);
+    expect(Object.fromEntries(span.attributes)).toEqual({
+      "zero.clientID": z.clientID,
+      "zero.connection.state": "connected",
+    });
+    expect(span.status).toMatchObject({ _tag: "Ended", exit: Exit.void });
   }, Effect.withTracer(recordingTracer)),
 );
 
