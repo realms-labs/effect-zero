@@ -1,5 +1,5 @@
 // Code borrowed from:
-// https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/zero-react/src/use-query.tsx
+// https://github.com/rocicorp/mono/blob/c22b300d15435712a4c5e61313645881942f1d3a/packages/zero-react/src/use-query.tsx (zero/v1.11.5)
 // https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/shared/src/deep-clone.ts
 
 import type { ErroredQuery, HumanReadable, JSONValue, QueryErrorDetails, ReadonlyJSONValue, ResultType } from "@rocicorp/zero";
@@ -8,13 +8,16 @@ import type { QueryResult } from "@rocicorp/zero/react";
 const emptyArray: unknown[] = [];
 
 const resultTypeUnknown = { type: "unknown" } as const;
+const resultTypeCached = { type: "cached" } as const;
 const resultTypeComplete = { type: "complete" } as const;
 const resultTypeError = {type: 'error'} as const;
 
 const emptySnapshotSingularUnknown = [undefined, resultTypeUnknown] as const;
+const emptySnapshotSingularCached = [undefined, resultTypeCached] as const;
 const emptySnapshotSingularComplete = [undefined, resultTypeComplete] as const;
 const emptySnapshotSingularErrorUnknown = [undefined, resultTypeError] as const;
 const emptySnapshotPluralUnknown = [emptyArray, resultTypeUnknown] as const;
+const emptySnapshotPluralCached = [emptyArray, resultTypeCached] as const;
 const emptySnapshotPluralComplete = [emptyArray, resultTypeComplete] as const;
 const emptySnapshotErrorUnknown = [emptyArray, resultTypeError] as const;
 
@@ -47,6 +50,8 @@ export function getSnapshot<TReturn>(
         return emptySnapshotSingularComplete as unknown as QueryResult<TReturn>;
       case 'unknown':
         return emptySnapshotSingularUnknown as unknown as QueryResult<TReturn>;
+      case 'cached':
+        return emptySnapshotSingularCached as unknown as QueryResult<TReturn>;
     }
   }
 
@@ -64,6 +69,8 @@ export function getSnapshot<TReturn>(
         return emptySnapshotPluralComplete as unknown as QueryResult<TReturn>;
       case 'unknown':
         return emptySnapshotPluralUnknown as unknown as QueryResult<TReturn>;
+      case 'cached':
+        return emptySnapshotPluralCached as unknown as QueryResult<TReturn>;
     }
   }
 
@@ -85,6 +92,8 @@ export function getSnapshot<TReturn>(
       return [data, resultTypeComplete];
     case 'unknown':
       return [data, resultTypeUnknown];
+    case 'cached':
+      return [data, resultTypeCached];
   }
 }
 

@@ -3,7 +3,7 @@ import { ErroredQuery, TransformedQuery, TransformResponseMessage } from "./cust
 import { TransformFailedBody } from "./error.js";
 
 // The code below was converted to Effect Schema from:
-// https://github.com/rocicorp/mono/blob/74273167af5d15ed07045e04165cb04d3983d44f/packages/zero-protocol/src/query-server.ts
+// https://github.com/rocicorp/mono/blob/c22b300d15435712a4c5e61313645881942f1d3a/packages/zero-protocol/src/query-server.ts
 
 export const QueryResult = Schema.Union([TransformedQuery, ErroredQuery]);
 export type QueryResult = typeof QueryResult.Type;

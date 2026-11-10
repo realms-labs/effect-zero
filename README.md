@@ -298,6 +298,25 @@ const todoAtom = Atom.fn(Effect.fn(function* (id: string, get: Atom.FnContext) {
 
 > **Note:** Queries created via `ZfxQuery.make` implement the [`Equal` trait](https://effect.website/docs/trait/equal/), so `Atom.family` would properly cache the results when using queries as arguments.
 
+### Loading states with `ZfxResult`
+
+A query's results come with how far to trust them: `Partial` (local data the server hasn't confirmed, which may be
+missing rows), `Cached` (local data the server confirmed in an earlier session, so an empty result is really empty) or
+`Complete` (confirmed by the server on this connection). `ZfxResult.make` turns an atom's `AsyncResult` of query results
+into a `ZfxResult.Result`, and `ZfxResult.acceptPartialMode` unwraps it to a plain `AsyncResult` of the value, in one of
+three modes:
+
+| Result                                | `acceptLocal` | `acceptConfirmed` | `waitForServer` |
+| ------------------------------------- | ------------- | ----------------- | --------------- |
+| `Partial` with rows                   | value         | value             | `Initial`       |
+| `Partial` list with no rows           | `[]`          | `Initial`         | `Initial`       |
+| `Partial` singular query with no row  | `Initial`     | `Initial`         | `Initial`       |
+| `Cached`, with rows or without        | value         | value             | `Initial`       |
+| `Complete`                            | value         | value             | value           |
+
+Use `acceptConfirmed` where an empty result shows something, like a "nothing here yet" screen: it shows rows as soon as
+there are any, but never an empty result the server hasn't confirmed.
+
 ## Differences from the original implementation
 
 In `effect-zero` the Zero transaction is an explicit step inside a mutator (via `serverTransaction.execute`/`.use`), so a mutator may run arbitrary Effect logic before and after it. (Upstream's `handleMutateRequest`/`transact` callback supports running code around the transaction too — this is not unique to `effect-zero` — but because an `effect-zero` mutator is a typed `Effect` with the transaction as a sub-step, it defines explicit rules for the edge cases this creates: the transaction may commit while surrounding code fails, or a mutator may run zero or multiple transactions.) Below are the rules `effect-zero` follows during mutation execution:
@@ -308,3 +327,5 @@ In `effect-zero` the Zero transaction is an explicit step inside a mutator (via 
 4. "Zero transactions then succeed" -> error response, because all mutations must have a transaction.
 5. "Zero transactions then fail" -> error response containing the first error encountered.
 6. "Fail before transaction" -> same as #5.
+7. "Transaction re-run" -> a server mutator can ask Zero to run its transaction again if it fails, with `tx.retryOn` on the server transaction (`yield* serverTransaction.use(async (tx) => tx.retryOn(predicate))`, before anything that can fail). `serverTransaction.execute` then returns how the last run ended. The predicate receives what the run failed with: the database's error if the transaction couldn't open or commit, or else Zero's `ApplicationError`, whose `cause` is the mutator's failure (for a failure inside `use`, a `TransactionUseError` whose `cause` holds what the callback threw). Only use it for a mutator that is safe to run again: the code inside the transaction runs once per attempt.
+8. "Transaction fails at `COMMIT`" -> the database can fail a transaction after the mutator is done with it (e.g. a deferred constraint). `serverTransaction.execute` fails with a `TransactCommitError`, and the push endpoint returns Zero's error for the mutation.

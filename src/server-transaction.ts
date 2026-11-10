@@ -12,6 +12,7 @@ import * as ClientTransaction from "./client-transaction.js";
 import type {
   MultipleTransactionsError,
   TransactCallbackNotInvokedError,
+  TransactCommitError,
   TransactInternalError,
 } from "./internal/server.js";
 import type * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
@@ -42,7 +43,7 @@ export const make = <const Id extends string, TSchema extends ZeroSchema, TTrans
         fn: (transaction: ZeroServerTransaction<TSchema, TTransaction>) => Effect.Effect<A, E, R>,
       ) => Effect.Effect<
         A,
-        E | TransactInternalError | TransactCallbackNotInvokedError | MultipleTransactionsError,
+        E | TransactInternalError | TransactCommitError | TransactCallbackNotInvokedError | MultipleTransactionsError,
         R | ServerSynchronizationContext.ServerSynchronizationContext
       >;
     }

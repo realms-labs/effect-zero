@@ -88,9 +88,9 @@ export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
 /**
  * Streams a query's results. Each subscription is traced: a `zero.query` span runs from subscribing until the query's
  * first complete result, which for rows this client hasn't synced yet is zero-cache's first sync of the query. Its
- * `zero.query.first_data` event marks the first result with rows (or the complete result, if that comes first), which
- * may come from the client's local store before the server confirms it. An error result fails the span with its
- * `QueryError`, and a subscriber that stops first interrupts it.
+ * `zero.query.first_data` event marks the first result with rows (or the first cached or complete result, if that
+ * comes first), which may come from the client's local store before the server confirms it. An error result fails
+ * the span with its `QueryError`, and a subscriber that stops first interrupts it.
  */
 export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   zero: Zero<S>,
@@ -134,17 +134,20 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
         }),
       ),
       Stream.map(QueryResult.make),
-      // Records `first_data` once: at the first result with rows, or the complete result if that comes first. The
-      // state is whether that's settled, which an error result (ending the span) also does.
+      // Records `first_data` once: at the first result with rows, or the first confirmed (cached or complete) result if
+      // that comes first. The state is whether that's settled, which an error result (ending the span) also does.
       Stream.mapAccumEffect(
         () => false,
         Effect.fnUntraced(function* (settled, result) {
           if (settled || Predicate.isTagged(result, "Error")) return [true, [result]] as const;
-          // A list's length, or 0 or 1 for a singular query's optional row.
-          const rows = Array.isArray(result.value) ? result.value.length : Predicate.isUndefined(result.value) ? 0 : 1;
+          const rows = QueryResult.rowCount(result.value);
           if (Predicate.isTagged(result, "Partial") && rows === 0) return [false, [result]] as const;
           span.event("zero.query.first_data", yield* Clock.currentTimeNanos, {
-            "zero.query.result_type": Match.valueTags(result, { Partial: () => "unknown", Complete: () => "complete" }),
+            "zero.query.result_type": Match.valueTags(result, {
+              Partial: () => "unknown",
+              Cached: () => "cached",
+              Complete: () => "complete",
+            }),
             "zero.query.rows": rows,
           });
           return [true, [result]] as const;
@@ -153,6 +156,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
       Stream.tap(
         Match.valueTags({
           Partial: () => Effect.void,
+          Cached: () => Effect.void,
           Complete: () => Scope.close(spanScope, Exit.void),
           Error: ({ details }) => Scope.close(spanScope, Exit.fail(new QueryError({ details }))),
         }),

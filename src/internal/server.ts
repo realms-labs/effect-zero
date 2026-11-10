@@ -1,3 +1,4 @@
+import type { ReadonlyJSONValue } from "@rocicorp/zero";
 import type * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
@@ -17,5 +18,11 @@ export class TransactInternalError extends Data.TaggedError("TransactInternalErr
     return Predicate.hasProperty(e, TransactInternalErrorTypeId);
   }
 }
+
+/** The mutator's last run succeeded, but the database failed its transaction afterwards, e.g. at `COMMIT`. */
+export class TransactCommitError extends Data.TaggedError("TransactCommitError")<{
+  readonly message?: string | undefined;
+  readonly details?: ReadonlyJSONValue | undefined;
+}> {}
 
 export class TransactCallbackNotInvokedError extends Data.TaggedError("TransactCallbackNotInvokedError") {}
