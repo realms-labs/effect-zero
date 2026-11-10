@@ -109,8 +109,8 @@ export async function handleZeroPush(req: Request): Promise<Response> {
       mutators: serverMutators,
       query,
       body,
-      // The authenticated user id (or `null`/`undefined` for logged-out clients).
-      userId: undefined,
+      // The authenticated user id, or `null` for logged-out clients.
+      userId: null,
     }),
   );
   return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
@@ -140,7 +140,7 @@ export const createZero = Effect.fn(function* (opts: { userID: string; auth?: st
 });
 ```
 
-`ZfxClient.make` traces the client's startup with a `zero.client.connect` span, which runs until it connects.
+`ZfxClient.make` traces the client's startup with a `zero.client.connect` span, which runs until it connects. Its `zero.client.initialize` child spans loading the local store (Zero's `initializing` state), until the client starts connecting.
 
 ### Running mutations
 
@@ -220,8 +220,8 @@ export async function handleZeroQueryRequest(req: Request): Promise<Response> {
       queries,
       schema,
       body,
-      // The authenticated user id (or `null`/`undefined` for logged-out clients).
-      userId: undefined,
+      // The authenticated user id, or `null` for logged-out clients.
+      userId: null,
     }),
   );
   return new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } });
@@ -257,6 +257,8 @@ const getTodoById = Effect.fn(function* (id: string) {
 ```
 
 Each `ZfxQuery.stream` subscription is traced with a `zero.query` span, which runs until the query's first sync.
+
+Results are Zero's own objects, shared with its view, so don't mutate them (sort a copy, for example). Rows that didn't change keep their identity from one result to the next.
 
 ### Usage with [effect-atom](https://github.com/tim-smart/effect-atom)
 

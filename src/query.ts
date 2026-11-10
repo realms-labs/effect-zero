@@ -16,7 +16,7 @@ import * as Stream from "effect/Stream";
 import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
 import { QueryError } from "./result.js";
-import { deepClone, getDefaultSnapshot, getSnapshot } from "./snapshot.js";
+import { getDefaultSnapshot, getSnapshot } from "./snapshot.js";
 
 // biome-ignore lint/suspicious/noConfusingVoidType: necessary to allow Schema.Void
 type QueryArgs<A extends ReadonlyJSONValue | void, B> = { _tag: "Encoded"; args: A } | { _tag: "Decoded"; args: B };
@@ -91,6 +91,10 @@ export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
  * `zero.query.first_data` event marks the first result with rows (or the first cached or complete result, if that
  * comes first), which may come from the client's local store before the server confirms it. An error result fails
  * the span with its `QueryError`, and a subscriber that stops first interrupts it.
+ *
+ * Results are Zero's own objects, shared with its view, so don't mutate them. Rows that didn't change keep their
+ * identity from one result to the next. Like `useQuery`'s, rows carry Zero's symbol-keyed bookkeeping, which deep
+ * equality (`Equal.equals`, vitest's `toEqual`) compares.
  */
 export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   zero: Zero<S>,
@@ -117,21 +121,20 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
     return Stream.callback<Parameters<Parameters<(typeof view)["addListener"]>[0]>>((queue) =>
       Effect.sync(() => view.addListener((...args) => Queue.offerUnsafe(queue, args))),
     ).pipe(
-      Stream.mapEffect(([data, resultType, error]) =>
-        Effect.sync(() => {
-          // logic here borrowed from: https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/zero-react/src/use-query.tsx#L543
-          const cloned = data === undefined ? data : (deepClone(data as ReadonlyJSONValue) as HumanReadable<R>);
-          return getSnapshot<R>(
-            internals.format.singular,
-            cloned,
-            resultType,
-            // TODO: Look into this. It seems like this is difficult but not impossible to model in the Effect paradigm.
-            // Likely need some kind of stateful piece between the publisher and and subscriber, allowing the subscriber to swap out
-            // the publisher when this function is called.
-            () => Effect.die("retry not available in `effect-zero`"),
-            error,
-          );
-        }),
+      Stream.map(([data, resultType, error]) =>
+        // logic here borrowed from: https://github.com/rocicorp/mono/blob/c22b300d15435712a4c5e61313645881942f1d3a/packages/zero-react/src/use-query.tsx
+        // A view's data is immutable once its listeners have it (each change copies what it touches), so it isn't
+        // copied here: rows that didn't change keep their identity from one result to the next.
+        getSnapshot<R>(
+          internals.format.singular,
+          data as HumanReadable<R>,
+          resultType,
+          // TODO: Look into this. It seems like this is difficult but not impossible to model in the Effect paradigm.
+          // Likely need some kind of stateful piece between the publisher and and subscriber, allowing the subscriber to swap out
+          // the publisher when this function is called.
+          () => Effect.die("retry not available in `effect-zero`"),
+          error,
+        ),
       ),
       Stream.map(QueryResult.make),
       // Records `first_data` once: at the first result with rows, or the first confirmed (cached or complete) result if

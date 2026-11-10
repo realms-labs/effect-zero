@@ -13,8 +13,6 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
 import type { NodeInspectSymbol } from "effect/Inspectable";
-import type * as LogLevel from "effect/LogLevel";
-import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Queue from "effect/Queue";
@@ -24,6 +22,7 @@ import * as Stream from "effect/Stream";
 import type * as Tracer from "effect/Tracer";
 import type * as Unify from "effect/Unify";
 import { type ContextSymbol, SchemaSymbol } from "./client-transaction.js";
+import * as LogSink from "./internal/log-sink.js";
 import * as Mutator from "./mutator.js";
 
 type _NodeInspectSymbol = NodeInspectSymbol;
@@ -53,20 +52,7 @@ export const make = Effect.fn(function* <TRegistry extends Mutator.AnyRegistry>(
         new Zero<Mutator.ZeroSchemaOf<TRegistry>>({
           // Zero's own logs (at its `logLevel`, "warn" by default) go through Effect's logger, unless `options` sets
           // a `logSink`.
-          logSink: {
-            log: (level, logContext, ...args) =>
-              Match.value(level).pipe(
-                Match.withReturnType<LogLevel.Severity>(),
-                Match.when("debug", () => "Debug"),
-                Match.when("info", () => "Info"),
-                Match.when("warn", () => "Warn"),
-                Match.when("error", () => "Error"),
-                Match.exhaustive,
-                (severity) => Effect.logWithLevel(severity)(...args),
-                Effect.annotateLogs({ ...logContext, logger: "zero" }),
-                Effect.runForkWith(context),
-              ),
-          },
+          logSink: LogSink.make(context),
           ...options,
           schema: mutators[Mutator.RegistryTypeId].transaction[SchemaSymbol],
           mutators,
@@ -77,9 +63,8 @@ export const make = Effect.fn(function* <TRegistry extends Mutator.AnyRegistry>(
     (zero) => Effect.promise(() => zero.close()),
   );
 
-  // Spans the client's startup, loading its local store (`initializing`) and connecting to zero-cache (`connecting`),
-  // until its first state after those: `connected`, or whichever state ended the attempt.
-  yield* Stream.callback<ConnectionState>((queue) =>
+  // The client's connection states, starting with the current one.
+  const connectionStates = Stream.callback<ConnectionState>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() => {
         // `subscribe` doesn't replay the current state.
@@ -88,10 +73,24 @@ export const make = Effect.fn(function* <TRegistry extends Mutator.AnyRegistry>(
       }),
       (unsubscribe) => Effect.sync(unsubscribe),
     ),
-  ).pipe(
-    Stream.filter((state) => state.name !== "initializing" && state.name !== "connecting"),
-    Stream.take(1),
-    Stream.runForEach((state) => Effect.annotateCurrentSpan(connectionAttributes(state))),
+  );
+
+  // Spans the client's startup, loading its local store (`initializing`) and connecting to zero-cache (`connecting`),
+  // until its first state after those: `connected`, or whichever state ended the attempt. A child span covers loading
+  // the local store, which depends on the device and how much is stored rather than on the network.
+  yield* Effect.gen(function* () {
+    yield* connectionStates.pipe(
+      Stream.filter((state) => state.name !== "initializing"),
+      Stream.take(1),
+      Stream.runForEach((state) => Effect.annotateCurrentSpan(connectionAttributes(state))),
+      Effect.withSpan("zero.client.initialize", { attributes: { "zero.clientID": zero.clientID } }),
+    );
+    yield* connectionStates.pipe(
+      Stream.filter((state) => state.name !== "initializing" && state.name !== "connecting"),
+      Stream.take(1),
+      Stream.runForEach((state) => Effect.annotateCurrentSpan(connectionAttributes(state))),
+    );
+  }).pipe(
     Effect.withSpan("zero.client.connect", { attributes: { "zero.clientID": zero.clientID } }),
     Effect.forkScoped({ startImmediately: true }),
   );
