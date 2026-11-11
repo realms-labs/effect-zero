@@ -77,8 +77,8 @@ export const make = Effect.fn(function* <TRegistry extends Mutator.AnyRegistry>(
     (zero) => Effect.promise(() => zero.close()),
   );
 
-  // Spans the client's startup, opening its local store and connecting to zero-cache, until its first state other
-  // than `connecting`: `connected`, or whichever state ended the attempt.
+  // Spans the client's startup, loading its local store (`initializing`) and connecting to zero-cache (`connecting`),
+  // until its first state after those: `connected`, or whichever state ended the attempt.
   yield* Stream.callback<ConnectionState>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() => {
@@ -89,7 +89,7 @@ export const make = Effect.fn(function* <TRegistry extends Mutator.AnyRegistry>(
       (unsubscribe) => Effect.sync(unsubscribe),
     ),
   ).pipe(
-    Stream.filter((state) => state.name !== "connecting"),
+    Stream.filter((state) => state.name !== "initializing" && state.name !== "connecting"),
     Stream.take(1),
     Stream.runForEach((state) => Effect.annotateCurrentSpan(connectionAttributes(state))),
     Effect.withSpan("zero.client.connect", { attributes: { "zero.clientID": zero.clientID } }),

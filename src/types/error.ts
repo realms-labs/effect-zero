@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import { JsonSchema } from "./common.js";
 
 // The code below was converted to Effect Schema from:
-// https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/zero-protocol/src/error.ts
+// https://github.com/rocicorp/mono/blob/c22b300d15435712a4c5e61313645881942f1d3a/packages/zero-protocol/src/error.ts
 
 const MutationId = Schema.Struct({
   id: Schema.Number,

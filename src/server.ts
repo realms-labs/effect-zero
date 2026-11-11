@@ -15,10 +15,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
-import { TransactCallbackNotInvokedError, TransactInternalError } from "./internal/server.js";
+import { TransactCallbackNotInvokedError, TransactCommitError, TransactInternalError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import type * as Mutator from "./mutator.js";
 import { type MakeQueryResult, QueryNameSymbol, RunQuerySymbol } from "./query.js";
@@ -30,7 +31,7 @@ import type { Mutation } from "./types/mutation.js";
 import type { PushBody } from "./types/push.js";
 
 // Updated to:
-// https://github.com/rocicorp/mono/blob/0eeabd495a26d0d67b9a5a81c424d8a76ef004b7/packages/zero-server/src/process-mutations.ts#L214
+// https://github.com/rocicorp/mono/blob/c22b300d15435712a4c5e61313645881942f1d3a/packages/zero-server/src/process-mutations.ts
 
 type _NodeInspectSymbol = NodeInspectSymbol;
 type _Unify = Unify.typeSymbol | Unify.unifySymbol | Unify.ignoreSymbol;
@@ -83,25 +84,33 @@ export const handleMutate = Effect.fn(function* <
               fn: (transaction: ZeroServerTransaction<TSchema, TTransaction>) => Effect.Effect<A, E, R>,
             ) {
               const innerCtx = yield* Effect.context<R>();
-              const exitDeferred = yield* Deferred.make<A, E>();
+              // How the latest run of `fn` ended. Zero runs it again while a `tx.retryOn` predicate asks it to, so
+              // only the last run's exit is the mutation's.
+              const lastExit = yield* Ref.make(Option.none<Exit.Exit<A, E>>());
 
-              yield* Effect.tryPromise({
+              const value = yield* Effect.tryPromise({
                 try: (signal) =>
                   transact_((transaction) =>
                     fn(transaction).pipe(
-                      Effect.onExit((exit) => Deferred.done(exitDeferred, exit)),
+                      Effect.onExit((exit) => Ref.set(lastExit, Option.some(exit))),
                       Effect.catchCause((cause) => Effect.die(makeApplicationError(cause))),
                       Effect.asVoid,
                       (effect) => Effect.runPromiseWith(innerCtx)(effect, { signal }),
                     ),
                   ),
                 catch: (error) => new TransactInternalError({ cause: Cause.fail(error) }),
-              }).pipe(Effect.flatMap((value) => Deferred.succeed(response, value)));
+              });
+              yield* Deferred.succeed(response, value);
 
-              return yield* Deferred.poll(exitDeferred).pipe(
+              const exit = yield* Ref.get(lastExit).pipe(
                 Effect.flatMap(Effect.fromOption(() => new TransactCallbackNotInvokedError())),
-                Effect.flatten,
               );
+              // The last run succeeded but Zero recorded an error anyway: the database failed the transaction after
+              // the mutator was done with it, e.g. at `COMMIT`, and no retry was asked for or the retries ran out.
+              if (Exit.isSuccess(exit) && "error" in value.result) {
+                return yield* new TransactCommitError(value.result);
+              }
+              return yield* exit;
             }, ServerSynchronizationContext.guard);
 
             const exit: Exit.Exit<unknown, unknown> = yield* runMutation(mutators, transaction, mutation).pipe(

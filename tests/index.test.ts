@@ -26,6 +26,8 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
+  identity,
   Latch,
   Layer,
   Logger,
@@ -41,6 +43,7 @@ import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Predicate from "effect/Predicate";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as SchemaGetter from "effect/SchemaGetter";
@@ -155,7 +158,18 @@ const mutators = ZfxMutator.registry(clientTransaction, {
       yield* clientTransaction.use(async () => {});
     }),
   }),
+  retriedInsert: ZfxMutator.make({
+    payload: Schema.Struct({ id: Schema.String, failingRuns: Schema.Number }),
+    mutator: Effect.fn(function* () {
+      yield* clientTransaction.use(async () => {});
+    }),
+  }),
+  commitFails: noop,
 });
+
+// How each server transaction ended, as `execute` returned it to the override.
+const retriedInsertExits: Exit.Exit<number, unknown>[] = [];
+const commitFailsExits: Exit.Exit<void, unknown>[] = [];
 
 // Server-only behaviour. Mutators that aren't overridden run their shared body in a server transaction.
 const serverMutators = ZfxMutator.server(mutators, {
@@ -225,6 +239,35 @@ const serverMutators = ZfxMutator.server(mutators, {
       ],
       { concurrency: "unbounded" },
     );
+  }),
+  // Asks Zero to re-run it on any failure, and fails its first `failingRuns` runs. Each run writes its number.
+  retriedInsert: Effect.fn(function* ({ id, failingRuns }) {
+    let runs = 0;
+    const exit = yield* serverTransaction
+      .use(async (tx) => {
+        tx.retryOn(() => true);
+        runs++;
+        await tx.mutate.messages.upsert({ id, body: `run ${runs}` });
+        if (runs <= failingRuns) throw new Error(`run ${runs} failed`);
+        return runs;
+      })
+      .pipe(serverTransaction.execute, Effect.exit);
+    retriedInsertExits.push(exit);
+    return yield* exit;
+  }),
+  // The mutator succeeds, but the database fails the transaction at `COMMIT`: a deferred unique constraint.
+  commitFails: Effect.fn(function* () {
+    const exit = yield* serverTransaction
+      .use(async (tx) => {
+        await tx.dbTransaction.query(
+          "create temp table commit_fails (id int unique deferrable initially deferred) on commit drop",
+          [],
+        );
+        await tx.dbTransaction.query("insert into commit_fails values (1), (1)", []);
+      })
+      .pipe(serverTransaction.execute, Effect.exit);
+    commitFailsExits.push(exit);
+    return yield* exit;
   }),
   // A plain Drizzle insert (no `ON CONFLICT`): since Zero 1.9, CRUD `insert` ignores primary-key collisions.
   rawInsertDuplicate: Effect.fn(function* (id) {
@@ -299,6 +342,40 @@ const waitForComplete = <A extends { readonly _tag: string }, E, R>(
     Effect.flatMap(Effect.fromOption),
     Effect.timeout(Duration.seconds(10)),
   );
+
+// Retries an assertion until it passes, for an outcome that lands in the background, rather than checking once after a
+// fixed wait. It fails with the assertion's last error.
+const eventually = (assertion: () => void) =>
+  Effect.try({ try: assertion, catch: identity }).pipe(
+    Effect.retry({ schedule: Schedule.spaced(Duration.millis(20)), times: 500 }),
+  );
+
+// Waits until the client has synced the messages that match from zero-cache. zero-cache can confirm a query before it
+// has replicated a write made just before, so a test that asserts on what the server confirms waits for this first.
+const waitForSync = (z: Effect.Success<typeof initZero>, predicate: (rows: ReadonlyArray<Message>) => boolean) =>
+  messagesQuery().pipe(Effect.flatMap((q) => waitForComplete(ZfxQuery.stream(z, q), ({ value }) => predicate(value))));
+
+// Collects an atom's successes until one matches, rather than whatever arrives within a fixed window. `onFirst` runs
+// once the first success arrives, so a write it makes can't land before the atom has shown the value it replaces.
+const successesUntil = <A, E>(
+  atom: Atom.Atom<AsyncResult.AsyncResult<A, E>>,
+  predicate: (value: A) => boolean,
+  onFirst: Effect.Effect<unknown> = Effect.void,
+) =>
+  Effect.gen(function* () {
+    const first = yield* Latch.make();
+    const fiber = yield* atom.pipe(
+      Atom.toStream,
+      Stream.filter(AsyncResult.isSuccess),
+      Stream.tap(() => first.open),
+      Stream.takeUntil(({ value }) => predicate(value)),
+      Stream.runCollect,
+      Effect.forkScoped,
+    );
+    yield* first.await;
+    yield* onFirst;
+    return yield* Fiber.join(fiber);
+  }).pipe(Effect.scoped, Effect.timeout(Duration.seconds(10)));
 
 const initZero = Effect.gen(function* () {
   const z = yield* ZfxClient.make(mutators, {
@@ -569,12 +646,13 @@ it.live(
 
     // Zero logs a client mutator's failure as an error.
     yield* Effect.promise(() => z.mutate(mutators.clientThrowsError()).client);
-    yield* Effect.sleep(Duration.millis(50));
 
-    expect(logged).toContainEqual({
-      message: expect.arrayContaining([expect.stringContaining('Mutator "clientThrowsError" app error on client')]),
-      logLevel: "Error",
-    });
+    yield* eventually(() =>
+      expect(logged).toContainEqual({
+        message: expect.arrayContaining([expect.stringContaining('Mutator "clientThrowsError" app error on client')]),
+        logLevel: "Error",
+      }),
+    );
   }),
 );
 
@@ -591,10 +669,11 @@ it.live(
     }).pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => effectLogs.push(message))])));
 
     yield* Effect.promise(() => z.mutate(mutators.clientThrowsError()).client);
-    yield* Effect.sleep(Duration.millis(50));
 
-    expect(sinkLogs).toContainEqual(
-      expect.arrayContaining([expect.stringContaining('Mutator "clientThrowsError" app error on client')]),
+    yield* eventually(() =>
+      expect(sinkLogs).toContainEqual(
+        expect.arrayContaining([expect.stringContaining('Mutator "clientThrowsError" app error on client')]),
+      ),
     );
     expect(effectLogs).not.toContainEqual(
       expect.arrayContaining([expect.stringContaining('Mutator "clientThrowsError" app error on client')]),
@@ -687,10 +766,13 @@ it.live(
   */
     z.mutate(mutators.messages.create({ id: nanoid(), body: "hello world" })).server.then();
 
-    yield* Effect.sleep(Duration.millis(100));
-
-    const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
-    expect(lastResponse).toMatchObject({ kind: "PushFailed", origin: "server", reason: "oooMutation" });
+    yield* eventually(() =>
+      expect(pipe(responses, Chunk.last, Option.getOrThrow)).toMatchObject({
+        kind: "PushFailed",
+        origin: "server",
+        reason: "oooMutation",
+      }),
+    );
   }),
 );
 
@@ -783,10 +865,11 @@ it.live(
 
     // Like the OOO case, the mutation is retried under the hood and never resolves, so inspect the last response.
     z.mutate(mutators.messages.create({ id: nanoid(), body: "second" })).server.then();
-    yield* Effect.sleep(Duration.millis(100));
-
-    const lastResponse = pipe(responses, Chunk.last, Option.getOrThrow);
-    expect(lastResponse).toMatchObject({ mutations: [{ result: { error: "alreadyProcessed" } }] });
+    yield* eventually(() =>
+      expect(pipe(responses, Chunk.last, Option.getOrThrow)).toMatchObject({
+        mutations: [{ result: { error: "alreadyProcessed" } }],
+      }),
+    );
   }),
 );
 
@@ -804,6 +887,49 @@ it.live(
     // PushFailed reason:"database" (only OutOfOrderMutation is passed through to upstream's top-level handler).
     const result = yield* Effect.promise(() => z.mutate(mutators.rawInsertDuplicate(id)).server);
     expect(result).toMatchObject({ type: "error", error: { type: "app" } });
+  }),
+);
+
+it.live(
+  "a mutator Zero re-runs reports how its last run ended",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const id = nanoid();
+    const result = yield* Effect.promise(() => z.mutate(mutators.retriedInsert({ id, failingRuns: 2 })).server);
+    expect(result).toEqual({ type: "success" });
+    // The override's transaction succeeded with the third run, which is the one that committed.
+    expect(retriedInsertExits.at(-1)).toEqual(Exit.succeed(3));
+    const rows = yield* Effect.promise(() => rawDb`select body from messages where id = ${id}`);
+    expect(rows).toEqual([{ body: "run 3" }]);
+  }),
+);
+
+it.live(
+  "a mutator whose re-runs all fail reports its last run's error",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const id = nanoid();
+    const result = yield* Effect.promise(() => z.mutate(mutators.retriedInsert({ id, failingRuns: 99 })).server);
+    expect(result).toMatchObject({ type: "error", error: { type: "app" } });
+    // Zero runs a mutator at most 5 times.
+    const exit = retriedInsertExits.at(-1)!;
+    expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({ message: "run 5 failed" });
+    const rows = yield* Effect.promise(() => rawDb`select body from messages where id = ${id}`);
+    expect(rows).toEqual([]);
+  }),
+);
+
+it.live(
+  "a transaction the database fails at COMMIT fails, though the mutator succeeded",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const result = yield* Effect.promise(() => z.mutate(mutators.commitFails()).server);
+    expect(result).toMatchObject({ type: "error", error: { type: "app" } });
+    const exit = commitFailsExits.at(-1)!;
+    expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({ _tag: "TransactCommitError" });
   }),
 );
 
@@ -882,11 +1008,16 @@ it.live(
     const mutation = yield* ZfxClient.mutate(z, mutators.messages.create(item)).pipe(Effect.withSpan("test.caller"));
     yield* mutation.server;
     // The mutation's span ends once both outcomes are recorded, in the background.
-    yield* Effect.sleep(Duration.millis(50));
+    const parent = yield* Effect.sync(() =>
+      recordedSpans.slice(before).find((span) => span.name === "zero.mutation" && span.status._tag === "Ended"),
+    ).pipe(
+      Effect.flatMap(Effect.fromNullishOr),
+      Effect.retry(Schedule.spaced(Duration.millis(10))),
+      Effect.timeout(Duration.seconds(10)),
+    );
 
     const spans = recordedSpans.slice(before);
     const caller = spans.find((span) => span.name === "test.caller")!;
-    const parent = spans.find((span) => span.name === "zero.mutation")!;
     expect(Option.getOrThrow(parent.parent)).toBe(caller);
     expect(Object.fromEntries(parent.attributes)).toMatchObject({
       "zero.mutator": "messages.create",
@@ -895,7 +1026,6 @@ it.live(
       // Whatever the connection state was when the write was sent, e.g. "connecting" for a new client.
       "zero.connection.state": expect.any(String),
     });
-    expect(parent.status._tag).toBe("Ended");
     if (parent.status._tag === "Ended") expect(Exit.isSuccess(parent.status.exit)).toBe(true);
     expect(spans.filter((span) => Option.getOrUndefined(span.parent) === parent).map((span) => span.name)).toEqual(
       expect.arrayContaining(["zero.mutation.client", "zero.mutation.server"]),
@@ -923,10 +1053,11 @@ it.live(
   "queries are traced until their first complete result",
   Effect.fn(function* () {
     const z = yield* initZero;
-    const before = recordedSpans.length;
 
     const item: Message = { id: nanoid(), body: "traced query" };
     yield* Effect.promise(() => ddb.insert(messages).values(item));
+    yield* waitForSync(z, (rows) => rows.some(({ id }) => id === item.id));
+    const before = recordedSpans.length;
     const q = yield* messageByIdQuery(item.id);
     const querySpan = () => recordedSpans.slice(before).find((span) => span.name === "zero.query");
     // Reads the span's status while the stream still runs, so this checks that the complete result ended it.
@@ -1119,7 +1250,7 @@ it.live(
 );
 
 it.live(
-  "Result.acceptPartialMode with 'acceptCached' should work for singular queries",
+  "Result.acceptPartialMode with 'acceptLocal' should work for singular queries",
   Effect.fn(function* () {
     const value: Message = { id: nanoid(), body: "hello world" };
 
@@ -1128,48 +1259,44 @@ it.live(
     const q = yield* messageByIdQuery(value.id);
     const atom = Atom.make(ZfxQuery.stream(z, q), { initialValue: ZfxQuery.initialValue(q) }).pipe(
       Atom.map(ZfxResult.make),
-      Atom.map(ZfxResult.acceptPartialMode("acceptCached")),
+      Atom.map(ZfxResult.acceptPartialMode("acceptLocal")),
     );
 
     yield* Effect.promise(() => ddb.insert(messages).values(value));
-    yield* Effect.sleep(Duration.millis(200));
-
-    const stream = atom.pipe(
-      Atom.toStream,
-      Stream.filter((v) => Predicate.isTagged(v, "Success")),
-      Stream.timeout(Duration.millis(200)),
-    );
 
     {
-      const changes = yield* stream.pipe(Stream.runCollect);
+      const changes = yield* successesUntil(atom, (row) => row?.body === value.body);
 
       expect(changes[changes.length - 1]).toEqual(expect.objectContaining({ _tag: "Success", value }));
     }
 
     const newBody = "hello world 2";
     const newValue: Message = { id: value.id, body: newBody };
-    yield* Effect.promise(() => ddb.update(messages).set({ body: newBody }).where(eq(messages.id, value.id)));
 
     {
-      const changes = yield* stream.pipe(Stream.runCollect);
+      // The update is made once the atom shows the current row, so it shows both. It can show the current row again
+      // when the server confirms it.
+      const changes = yield* successesUntil(
+        atom,
+        (row) => row?.body === newBody,
+        Effect.promise(() => ddb.update(messages).set({ body: newBody }).where(eq(messages.id, value.id))),
+      );
 
-      expect(changes).toEqual([
-        expect.objectContaining({ _tag: "Success", value }),
-        expect.objectContaining({ _tag: "Success", value: newValue }),
-      ]);
+      expect(changes[0]).toEqual(expect.objectContaining({ _tag: "Success", value }));
+      expect(changes[changes.length - 1]).toEqual(expect.objectContaining({ _tag: "Success", value: newValue }));
     }
   }, Effect.provide(AtomRegistry.layer)),
 );
 
 it.live(
-  "Result.acceptPartialMode with 'acceptCached' should work for plural queries",
+  "Result.acceptPartialMode with 'acceptLocal' should work for plural queries",
   Effect.fn(function* () {
     const z = yield* initZero;
 
     const q = yield* messagesQuery();
     const atom = Atom.make(ZfxQuery.stream(z, q), { initialValue: ZfxQuery.initialValue(q) }).pipe(
       Atom.map(ZfxResult.make),
-      Atom.map(ZfxResult.acceptPartialMode("acceptCached")),
+      Atom.map(ZfxResult.acceptPartialMode("acceptLocal")),
     );
 
     const values: Message[] = [
@@ -1177,15 +1304,9 @@ it.live(
       { id: nanoid(), body: "hello world 2" },
     ];
     yield* Effect.promise(() => ddb.insert(messages).values(values));
-    yield* Effect.sleep(Duration.millis(200));
 
-    const stream = atom.pipe(
-      Atom.toStream,
-      Stream.filter((v) => Predicate.isTagged(v, "Success")),
-      Stream.timeout(Duration.millis(200)),
-    );
     {
-      const changes = yield* stream.pipe(Stream.runCollect);
+      const changes = yield* successesUntil(atom, (rows) => rows.length === values.length);
 
       expect(changes[changes.length - 1]).toEqual(
         expect.objectContaining({ _tag: "Success", value: expect.arrayContaining(values) }),
@@ -1193,15 +1314,20 @@ it.live(
     }
 
     const newValue: Message = { id: nanoid(), body: "hello world 3" };
-    yield* Effect.promise(() => ddb.insert(messages).values(newValue));
 
     {
-      const changes = yield* stream.pipe(Stream.runCollect);
+      // The insert is made once the atom shows the current rows, so it shows both. It can show the current rows again
+      // when the server confirms them.
+      const changes = yield* successesUntil(
+        atom,
+        (rows) => rows.length === values.length + 1,
+        Effect.promise(() => ddb.insert(messages).values(newValue)),
+      );
 
-      expect(changes).toEqual([
-        expect.objectContaining({ _tag: "Success", value: expect.arrayContaining(values) }),
+      expect(changes[0]).toEqual(expect.objectContaining({ _tag: "Success", value: expect.arrayContaining(values) }));
+      expect(changes[changes.length - 1]).toEqual(
         expect.objectContaining({ _tag: "Success", value: expect.arrayContaining([...values, newValue]) }),
-      ]);
+      );
     }
   }, Effect.provide(AtomRegistry.layer)),
 );
@@ -1220,16 +1346,10 @@ it.live(
     );
 
     yield* Effect.promise(() => ddb.insert(messages).values(value));
-    yield* Effect.sleep(Duration.millis(200));
-
-    const stream = atom.pipe(
-      Atom.toStream,
-      Stream.filter((v) => Predicate.isTagged(v, "Success")),
-      Stream.timeout(Duration.millis(200)),
-    );
+    yield* waitForSync(z, (rows) => rows.length === 1);
 
     {
-      const changes = yield* stream.pipe(Stream.runCollect);
+      const changes = yield* successesUntil(atom, (row) => row?.body === value.body);
 
       expect(changes).toEqual([expect.objectContaining({ _tag: "Success", value })]);
     }
@@ -1237,10 +1357,10 @@ it.live(
     const newBody = "hello world 2";
     const newValue: Message = { id: value.id, body: newBody };
     yield* Effect.promise(() => ddb.update(messages).set({ body: newBody }).where(eq(messages.id, value.id)));
-    yield* Effect.sleep(Duration.millis(200));
+    yield* waitForSync(z, (rows) => rows[0]?.body === newBody);
 
     {
-      const changes = yield* stream.pipe(Stream.runCollect);
+      const changes = yield* successesUntil(atom, (row) => row?.body === newBody);
 
       expect(changes).toEqual([expect.objectContaining({ _tag: "Success", value: newValue })]);
     }
@@ -1263,25 +1383,20 @@ it.live(
       { id: nanoid(), body: "hello world 2" },
     ];
     yield* Effect.promise(() => ddb.insert(messages).values(values));
-    yield* Effect.sleep(Duration.millis(200));
+    yield* waitForSync(z, (rows) => rows.length === values.length);
 
-    const stream = atom.pipe(
-      Atom.toStream,
-      Stream.filter((v) => Predicate.isTagged(v, "Success")),
-      Stream.timeout(Duration.millis(200)),
-    );
     {
-      const changes = yield* stream.pipe(Stream.runCollect);
+      const changes = yield* successesUntil(atom, (rows) => rows.length === values.length);
 
       expect(changes).toEqual([expect.objectContaining({ _tag: "Success", value: expect.arrayContaining(values) })]);
     }
 
     const newValue: Message = { id: nanoid(), body: "hello world 3" };
     yield* Effect.promise(() => ddb.insert(messages).values(newValue));
-    yield* Effect.sleep(Duration.millis(200));
+    yield* waitForSync(z, (rows) => rows.length === values.length + 1);
 
     {
-      const changes = yield* stream.pipe(Stream.runCollect);
+      const changes = yield* successesUntil(atom, (rows) => rows.length === values.length + 1);
 
       expect(changes).toEqual([
         expect.objectContaining({ _tag: "Success", value: expect.arrayContaining([...values, newValue]) }),
