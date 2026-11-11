@@ -19,6 +19,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type * as Unify from "effect/Unify";
+import * as LogSink from "./internal/log-sink.js";
 import { TransactCallbackNotInvokedError, TransactCommitError, TransactInternalError } from "./internal/server.js";
 import * as ServerSynchronizationContext from "./internal/server-synchronization-context.js";
 import type * as Mutator from "./mutator.js";
@@ -44,7 +45,11 @@ type QueryUserId = Extract<Awaited<ReturnType<typeof handleQueryRequest>>, { kin
 
 /**
  * Handles Zero's push endpoint, running each mutation's server implementation: its override from
- * `ZfxMutator.server`, or else its shared body in a server transaction.
+ * `ZfxMutator.server`, or else its shared body in a server transaction. Zero's logs for the push go through Effect's
+ * logger.
+ *
+ * `userId` is the authenticated user's ID, or `null` or `undefined` for a logged-out client. zero-cache refuses the
+ * connection when it doesn't match the user ID the client connected with.
  */
 export const handleMutate = Effect.fn(function* <
   TSchema extends ZeroSchema,
@@ -150,6 +155,7 @@ export const handleMutate = Effect.fn(function* <
         query,
         body: body as ReadonlyJSONValue,
         userID: userId,
+        logSink: LogSink.make(ctx),
       }),
     catch: (e) => new HandleMutateError({ cause: Cause.fail(e) }),
   });
@@ -212,6 +218,11 @@ class ServerArgsParseError extends Data.TaggedError("ServerArgsParseError")<{
 
 class HandleMutateError extends Data.TaggedError("HandleMutateError")<{ readonly cause: Cause.Cause<unknown> }> {}
 
+/**
+ * Handles Zero's query endpoint, turning each named query into its ZQL.
+ *
+ * `userId` is the authenticated user's ID, or `null` or `undefined` for a logged-out client; see {@link handleMutate}.
+ */
 export const handleQuery = Effect.fn(function* <E, R1, R2>({
   queries,
   schema,

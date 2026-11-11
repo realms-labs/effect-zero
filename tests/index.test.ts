@@ -33,6 +33,7 @@ import {
   Logger,
   Option,
   pipe,
+  References,
   Schedule,
   Schema,
   Stream,
@@ -329,17 +330,25 @@ const transformArgsQuery = ZfxQuery.make({
 
 const queries = [messageByIdQuery, messagesQuery, transformArgsQuery] satisfies ZfxQuery.MakeQueryResult[];
 
+// Zero's rows carry its own symbol-keyed bookkeeping (a reference count), which `toEqual` compares. A structured clone
+// drops it, leaving the row's columns.
+const plain = <A>(value: A) => structuredClone(value);
+
 // Waits for a complete result that matches, rather than the last result within a fixed window: zero-cache can make
 // a client reconnect (e.g. after a test truncates a table), which delays its results.
 const waitForComplete = <A extends { readonly _tag: string }, E, R>(
   stream: Stream.Stream<A, E, R>,
-  predicate: (result: Extract<A, { readonly _tag: "Complete" }>) => boolean,
+  predicate: (result: Extract<A, { readonly _tag: "Complete"; readonly value: unknown }>) => boolean,
 ) =>
   stream.pipe(
-    Stream.filter((result): result is Extract<A, { readonly _tag: "Complete" }> => result._tag === "Complete"),
+    Stream.filter(
+      (result): result is Extract<A, { readonly _tag: "Complete"; readonly value: unknown }> =>
+        result._tag === "Complete",
+    ),
     Stream.filter(predicate),
     Stream.runHead,
     Effect.flatMap(Effect.fromOption),
+    Effect.map((result) => ({ ...result, value: plain(result.value) })),
     Effect.timeout(Duration.seconds(10)),
   );
 
@@ -369,6 +378,7 @@ const successesUntil = <A, E>(
       Stream.filter(AsyncResult.isSuccess),
       Stream.tap(() => first.open),
       Stream.takeUntil(({ value }) => predicate(value)),
+      Stream.map(AsyncResult.map(plain)),
       Stream.runCollect,
       Effect.forkScoped,
     );
@@ -417,13 +427,13 @@ beforeAll(async () => {
       const params = yield* HttpRouter.schemaParams(MutateParams);
       const payload = yield* HttpServerRequest.schemaBodyJson(PushBody);
       // `handleMutate` returns the upstream push response already in wire format, so no encoding step.
-      // No auth in this test harness, so the client is logged out (`userId: undefined`).
+      // No auth in this test harness, so the client is logged out (`userId: null`).
       const result = yield* ZfxServer.handleMutate({
         transaction: serverTransaction,
         mutators: serverMutators,
         query: params,
         body: payload,
-        userId: undefined,
+        userId: null,
       });
 
       responses = Chunk.append(responses, result);
@@ -447,7 +457,7 @@ beforeAll(async () => {
     "/query",
     Effect.gen(function* () {
       const payload = yield* HttpServerRequest.schemaBodyJson(TransformRequestMessage);
-      const response = yield* ZfxServer.handleQuery({ queries, schema, body: payload, userId: undefined });
+      const response = yield* ZfxServer.handleQuery({ queries, schema, body: payload, userId: null });
       return yield* HttpServerResponse.json(response);
     }).pipe(
       Effect.catchCause(
@@ -845,7 +855,7 @@ it.live(
       mutators: serverMutators,
       query: params,
       body,
-      userId: undefined,
+      userId: null,
     });
     expect(result).toMatchObject({ kind: "PushFailed", origin: "server", reason: "unsupportedPushVersion" });
   }),
@@ -930,6 +940,82 @@ it.live(
     expect(result).toMatchObject({ type: "error", error: { type: "app" } });
     const exit = commitFailsExits.at(-1)!;
     expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({ _tag: "TransactCommitError" });
+  }),
+);
+
+it.live(
+  "rows that didn't change keep their identity from one result to the next",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const value1: Message = { id: nanoid(), body: "hello world" };
+    yield* Effect.promise(() => ddb.insert(messages).values(value1));
+
+    const q = yield* messagesQuery();
+    const completes = ZfxQuery.stream(z, q).pipe(
+      Stream.filter((result) => Predicate.isTagged(result, "Complete")),
+      Stream.map((result) => result.value),
+    );
+    // Inserts the second row only once the first result with rows is in, so the two arrive as separate results.
+    const firstRows = yield* Latch.make();
+    const fiber = yield* completes.pipe(
+      Stream.filter((rows) => rows.length > 0),
+      Stream.tap(() => firstRows.open),
+      Stream.take(2),
+      Stream.runCollect,
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* firstRows.await;
+    yield* Effect.promise(() => ddb.insert(messages).values({ id: nanoid(), body: "hello world 2" }));
+    const [first, second] = yield* fiber.pipe(Fiber.join, Effect.timeout(Duration.seconds(10)));
+
+    expect(second).toHaveLength(2);
+    expect(second!.find((row) => row.id === value1.id)).toBe(first![0]);
+  }),
+);
+
+it.live(
+  "Zero's logs for a push go through Effect's logger",
+  Effect.fn(function* () {
+    const logs: { message: unknown; annotations: Record<string, unknown> }[] = [];
+    const body: PushBody = {
+      clientGroupID: nanoid(),
+      mutations: [
+        {
+          type: "custom",
+          id: 1,
+          clientID: nanoid(),
+          name: "retriedInsert",
+          args: [{ id: nanoid(), failingRuns: 1 }],
+          timestamp: Date.now(),
+        },
+      ],
+      pushVersion: 1,
+      timestamp: Date.now(),
+      requestID: nanoid(),
+    };
+
+    yield* ZfxServer.handleMutate({
+      transaction: serverTransaction,
+      mutators: serverMutators,
+      query: { schema: "zero_0", appID: "zero" },
+      body,
+      userId: null,
+    }).pipe(
+      Effect.provide(
+        Logger.layer([
+          Logger.make(({ message, fiber }) =>
+            logs.push({ message, annotations: fiber.getRef(References.CurrentLogAnnotations) }),
+          ),
+        ]),
+      ),
+    );
+
+    // Zero warns when it re-runs a mutator.
+    expect(logs).toContainEqual({
+      message: expect.arrayContaining([expect.stringContaining("re-running mutator (retry 1)")]),
+      annotations: expect.objectContaining({ logger: "zero" }),
+    });
   }),
 );
 
@@ -1168,6 +1254,15 @@ it.live(
       "zero.connection.state": "connected",
     });
     expect(span.status).toMatchObject({ _tag: "Ended", exit: Exit.void });
+
+    // Loading the local store is its first part, which ends when the client starts connecting.
+    const initialize = recordedSpans.slice(before).find((span) => span.name === "zero.client.initialize")!;
+    expect(Option.getOrThrow(initialize.parent)).toBe(span);
+    expect(Object.fromEntries(initialize.attributes)).toEqual({
+      "zero.clientID": z.clientID,
+      "zero.connection.state": "connecting",
+    });
+    expect(initialize.status).toMatchObject({ _tag: "Ended", exit: Exit.void });
   }, Effect.withTracer(recordingTracer)),
 );
 
@@ -1188,7 +1283,7 @@ it.live(
         timestamp: Date.now(),
         requestID: nanoid(),
       },
-      userId: undefined,
+      userId: null,
     });
 
     expect(result).toEqual({

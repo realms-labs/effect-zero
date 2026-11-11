@@ -1,8 +1,7 @@
 // Code borrowed from:
 // https://github.com/rocicorp/mono/blob/c22b300d15435712a4c5e61313645881942f1d3a/packages/zero-react/src/use-query.tsx (zero/v1.11.5)
-// https://github.com/rocicorp/mono/blob/8e0f600fb3a9185facf60cfd4971d260b266690e/packages/shared/src/deep-clone.ts
 
-import type { ErroredQuery, HumanReadable, JSONValue, QueryErrorDetails, ReadonlyJSONValue, ResultType } from "@rocicorp/zero";
+import type { ErroredQuery, HumanReadable, QueryErrorDetails, ResultType } from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
 
 const emptyArray: unknown[] = [];
@@ -109,49 +108,4 @@ function makeError(retry: () => void, error: ErroredQuery): QueryErrorDetails {
       ...(error.details ? {details: error.details} : {}),
     },
   };
-}
-
-export function deepClone(value: ReadonlyJSONValue): JSONValue {
-  const seen: Array<ReadonlyJSONValue> = [];
-  return internalDeepClone(value, seen);
-}
-
-function internalDeepClone(value: ReadonlyJSONValue, seen: Array<ReadonlyJSONValue>): JSONValue {
-  switch (typeof value) {
-    case "boolean":
-    case "number":
-    case "string":
-    case "undefined":
-      return value;
-    case "object": {
-      if (value === null) {
-        return null;
-      }
-      if (seen.includes(value)) {
-        throw new Error("Cyclic object");
-      }
-      seen.push(value);
-      if (Array.isArray(value)) {
-        const rv = value.map((v) => internalDeepClone(v, seen));
-        seen.pop();
-        return rv;
-      }
-
-      const obj: JSONValue = {};
-
-      for (const k in value) {
-        if (Object.hasOwn(value, k)) {
-          const v = (value as Record<string, ReadonlyJSONValue>)[k];
-          if (v !== undefined) {
-            obj[k] = internalDeepClone(v, seen);
-          }
-        }
-      }
-      seen.pop();
-      return obj;
-    }
-
-    default:
-      throw new Error(`Invalid type: ${typeof value}`);
-  }
 }
