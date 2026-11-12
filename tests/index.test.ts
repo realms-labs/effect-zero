@@ -1207,9 +1207,9 @@ it.live(
     );
 
     // Zero doesn't count the local rows: until the server answers, the count is `0`.
-    expect(results[0]).toEqual({ _tag: "Partial", value: 0, aggregate: { fn: "count" } });
-    expect(results.at(-1)).toEqual({ _tag: "Complete", value: items.length, aggregate: { fn: "count" } });
-    expect(ZfxQuery.initialValue(q)).toEqual({ _tag: "Partial", value: 0, aggregate: { fn: "count" } });
+    expect(results[0]).toEqual({ _tag: "Partial", value: 0, aggregate: Option.some({ fn: "count" }) });
+    expect(results.at(-1)).toEqual({ _tag: "Complete", value: items.length, aggregate: Option.some({ fn: "count" }) });
+    expect(ZfxQuery.initialValue(q)).toEqual({ _tag: "Partial", value: 0, aggregate: Option.some({ fn: "count" }) });
     const span = recordedSpans.slice(before).find((span) => span.name === "zero.query")!;
     expect(Object.fromEntries(span.attributes)).toEqual({
       "zero.query.name": "messageCount",

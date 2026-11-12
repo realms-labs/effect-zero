@@ -4,6 +4,7 @@ import { queryInternalsTag } from "@rocicorp/zero/bindings";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Query from "./query.js";
 
@@ -142,13 +143,21 @@ describe("initialValue", () => {
   const zql = createBuilder(createSchema({ tables: [issue] }));
 
   it("is an empty list, no row, or an aggregate over no rows", () => {
-    expect(Query.initialValue(zql.issue)).toStrictEqual({ _tag: "Partial", value: [] });
-    expect(Query.initialValue(zql.issue.one())).toStrictEqual({ _tag: "Partial", value: undefined });
-    expect(Query.initialValue(zql.issue.count())).toEqual({ _tag: "Partial", value: 0, aggregate: { fn: "count" } });
+    expect(Query.initialValue(zql.issue)).toEqual({ _tag: "Partial", value: [], aggregate: Option.none() });
+    expect(Query.initialValue(zql.issue.one())).toEqual({
+      _tag: "Partial",
+      value: undefined,
+      aggregate: Option.none(),
+    });
+    expect(Query.initialValue(zql.issue.count())).toEqual({
+      _tag: "Partial",
+      value: 0,
+      aggregate: Option.some({ fn: "count" }),
+    });
     expect(Query.initialValue(zql.issue.max("votes"))).toEqual({
       _tag: "Partial",
       value: null,
-      aggregate: { fn: "max", field: "votes" },
+      aggregate: Option.some({ fn: "max", field: "votes" }),
     });
   });
 });

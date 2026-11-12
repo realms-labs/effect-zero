@@ -119,7 +119,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
 ) =>
   Effect.gen(function* () {
     const internals = asQueryInternals(query);
-    const { aggregate } = internals.format;
+    const aggregate = Option.fromNullishOr(internals.format.aggregate);
     // Closed by the first complete or error result, or as interrupted when the stream ends first.
     const spanScope = yield* Effect.acquireRelease(Scope.make(), (scope, exit) =>
       Scope.close(scope, Exit.isSuccess(exit) ? Exit.interrupt() : exit),
@@ -130,7 +130,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
         "zero.clientID": zero.clientID,
         ...Rec.getSomes({
           "zero.query.name": Option.fromNullishOr(internals.customQueryID?.name),
-          "zero.query.aggregate": Option.fromNullishOr(aggregate?.fn),
+          "zero.query.aggregate": Option.map(aggregate, ({ fn }) => fn),
         }),
       },
     }).pipe(Scope.provide(spanScope));
@@ -165,7 +165,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
         Effect.fnUntraced(function* (settled, result) {
           if (settled || Predicate.isTagged(result, "Error")) return [true, [result]] as const;
           const rows = QueryResult.rowCount(result.value);
-          if (Predicate.isTagged(result, "Partial") && (aggregate !== undefined || rows === 0)) {
+          if (Predicate.isTagged(result, "Partial") && (Option.isSome(aggregate) || rows === 0)) {
             return [false, [result]] as const;
           }
           span.event("zero.query.first_data", yield* Clock.currentTimeNanos, {
@@ -175,7 +175,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
               Complete: () => "complete",
             }),
             // An aggregate's result is a value, not rows.
-            ...(aggregate === undefined ? { "zero.query.rows": rows } : {}),
+            ...(Option.isNone(aggregate) ? { "zero.query.rows": rows } : {}),
           });
           return [true, [result]] as const;
         }),
@@ -201,5 +201,5 @@ export const initialValue = <T extends keyof S["tables"] & string, S extends Zer
   const { format } = asQueryInternals(query);
   // `emptyViewValue` takes any format, so TypeScript can't tie its value to `R`.
   const value = emptyViewValue(format) as unknown as HumanReadable<R>;
-  return QueryResult.make<R>([value, { type: "unknown" }], format.aggregate);
+  return QueryResult.make<R>([value, { type: "unknown" }], Option.fromNullishOr(format.aggregate));
 };

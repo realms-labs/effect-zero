@@ -322,10 +322,9 @@ there are any, but never an empty result the server hasn't confirmed.
 
 A top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`) has no local result: Zero doesn't compute it from
 the local store, so until the server answers its value is the aggregate over no rows, `0` for `count()` and `null` for
-the others. Its results carry Zero's description of the aggregate, like `aggregate: { fn: "count" }`, and every mode
-waits for it to be cached or complete. An
-aggregate in a relationship, like `related("comments", (q) => q.count())`, is part of its parent's rows, which the
-modes treat as usual.
+the others. Its results carry Zero's description of the aggregate, like `aggregate: Option.some({ fn: "count" })`
+(`Option.none()` for other queries), and every mode waits for it to be cached or complete. An aggregate in a
+relationship, like `related("comments", (q) => q.count())`, is part of its parent's rows, which the modes treat as usual.
 
 ## Differences from the original implementation
 
