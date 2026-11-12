@@ -186,8 +186,8 @@ export const acceptPartialMode: {
      *   - When you want to wait for the server before doing something.
      *   - Only used for queries in which you need an fully accurate result before doing something.
      *
-     * A top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`) has no local result, only a placeholder,
-     * so `acceptLocal` and `acceptConfirmed` wait for it to be cached or complete.
+     * Zero doesn't compute a top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`) locally, so
+     * `acceptLocal` and `acceptConfirmed` wait for it to be cached or complete.
      **/
     mode: AcceptPartialMode,
   ): Accepted<A, E>;
@@ -209,8 +209,8 @@ export const acceptPartialMode: {
      *   - When you want to wait for the server before doing something.
      *   - Only used for queries in which you need an fully accurate result before doing something.
      *
-     * A top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`) has no local result, only a placeholder,
-     * so `acceptLocal` and `acceptConfirmed` wait for it to be cached or complete.
+     * Zero doesn't compute a top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`) locally, so
+     * `acceptLocal` and `acceptConfirmed` wait for it to be cached or complete.
      **/
     mode: AcceptPartialMode,
   ): <A, E>(self: Result<A, E>) => Accepted<A, E>;
@@ -219,13 +219,13 @@ export const acceptPartialMode: {
     Match.value(mode).pipe(
       Match.when("acceptLocal", () =>
         Match.valueTags(result, {
-          Partial: ({ value, placeholder }) => !placeholder && Predicate.isNotUndefined(value),
+          Partial: ({ value, aggregate }) => aggregate === undefined && Predicate.isNotUndefined(value),
           Cached: () => true,
         }),
       ),
       Match.when("acceptConfirmed", () =>
         Match.valueTags(result, {
-          Partial: ({ value, placeholder }) => !placeholder && rowCount(value) > 0,
+          Partial: ({ value, aggregate }) => aggregate === undefined && rowCount(value) > 0,
           Cached: () => true,
         }),
       ),

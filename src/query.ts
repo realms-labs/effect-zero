@@ -49,7 +49,11 @@ export const make = <
   payload: Schema.Codec<B, A, R1, R1>;
   query: (args: NoInfer<B>) => Effect.Effect<ZeroQuery<T, S, R>, E, R2>;
 }) => {
-  const runQuery = Effect.fn(function* (args: QueryArgs<A, B>) {
+  // Typed as the plain Zero query, without its `Equal`: TypeScript doesn't check a singular or aggregate query
+  // intersected with `Equal` as Zero's `AnyQuery`, which `MakeQueryResult` takes.
+  const runQuery = Effect.fn(function* (
+    args: QueryArgs<A, B>,
+  ): Effect.fn.Return<ZeroQuery<T, S, R>, Schema.SchemaError | E, R1 | R2> {
     const { encoded, decoded } = yield* Match.valueTags(args, {
       Encoded: ({ args: encoded }) =>
         Effect.map(Schema.decodeEffect(options.payload)(encoded), (decoded) => ({ encoded, decoded })),
@@ -78,17 +82,11 @@ export const make = <
     );
   });
 
-  // The server only needs the Zero query. Typed with its `Equal` too, a singular or aggregate query doesn't check as
-  // Zero's `AnyQuery`, which `MakeQueryResult` takes.
-  const runZeroQuery: (
-    args: QueryArgs<A, B>,
-  ) => Effect.Effect<ZeroQuery<T, S, R>, Effect.Error<ReturnType<typeof runQuery>>, R1 | R2> = runQuery;
-
   // We return a callable object for ease of use on the frontend.
   return Object.assign((args: B) => runQuery({ _tag: "Decoded", args }), {
     [QueryNameSymbol]: options.name,
     // Internally, we include the full `runQuery` function for use in library's server logic.
-    [RunQuerySymbol]: runZeroQuery,
+    [RunQuerySymbol]: runQuery,
   });
 };
 
@@ -107,8 +105,8 @@ export interface MakeQueryResult<E = any, R = any> {
  * Streams a query's results. Each subscription is traced: a `zero.query` span runs from subscribing until the query's
  * first complete result, which for rows this client hasn't synced yet is zero-cache's first sync of the query. Its
  * `zero.query.first_data` event marks the first result with rows (or the first cached or complete result, if that
- * comes first), which may come from the client's local store before the server confirms it. A top-level aggregate's
- * `Partial` results are placeholders, so its first data is its first cached or complete result. An error result fails
+ * comes first), which may come from the client's local store before the server confirms it. Zero doesn't compute a
+ * top-level aggregate locally, so its first data is its first cached or complete result. An error result fails
  * the span with its `QueryError`, and a subscriber that stops first interrupts it.
  *
  * Results are Zero's own objects, shared with its view, so don't mutate them. Rows that didn't change keep their
@@ -159,7 +157,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
           error,
         ),
       ),
-      Stream.map((snapshot) => QueryResult.make(snapshot, { aggregate: aggregate !== undefined })),
+      Stream.map((snapshot) => QueryResult.make(snapshot, aggregate)),
       // Records `first_data` once: at the first result with rows, or the first confirmed (cached or complete) result if
       // that comes first. The state is whether that's settled, which an error result (ending the span) also does.
       Stream.mapAccumEffect(
@@ -167,7 +165,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
         Effect.fnUntraced(function* (settled, result) {
           if (settled || Predicate.isTagged(result, "Error")) return [true, [result]] as const;
           const rows = QueryResult.rowCount(result.value);
-          if (Predicate.isTagged(result, "Partial") && (result.placeholder || rows === 0)) {
+          if (Predicate.isTagged(result, "Partial") && (aggregate !== undefined || rows === 0)) {
             return [false, [result]] as const;
           }
           span.event("zero.query.first_data", yield* Clock.currentTimeNanos, {
@@ -194,7 +192,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
   }).pipe(Stream.unwrap);
 
 /**
- * What a query shows before its first result: an empty list, no row, or a top-level aggregate's placeholder (`0` for
+ * What a query shows before its first result: an empty list, no row, or a top-level aggregate over no rows (`0` for
  * `count()`, `null` for the others), as a `Partial` result.
  */
 export const initialValue = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
@@ -203,5 +201,5 @@ export const initialValue = <T extends keyof S["tables"] & string, S extends Zer
   const { format } = asQueryInternals(query);
   // `emptyViewValue` takes any format, so TypeScript can't tie its value to `R`.
   const value = emptyViewValue(format) as unknown as HumanReadable<R>;
-  return QueryResult.make<R>([value, { type: "unknown" }], { aggregate: format.aggregate !== undefined });
+  return QueryResult.make<R>([value, { type: "unknown" }], format.aggregate);
 };

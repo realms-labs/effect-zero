@@ -1188,7 +1188,7 @@ it.live(
 );
 
 it.live(
-  "an aggregate's local placeholder isn't its first data",
+  "an aggregate's local value isn't its first data",
   Effect.fn(function* () {
     const z = yield* initZero;
 
@@ -1206,10 +1206,10 @@ it.live(
       Effect.timeout(Duration.seconds(10)),
     );
 
-    // Zero doesn't count the local rows: until the server answers, the count is a placeholder `0`.
-    expect(results[0]).toEqual({ _tag: "Partial", value: 0, placeholder: true });
-    expect(results.at(-1)).toEqual({ _tag: "Complete", value: items.length });
-    expect(ZfxQuery.initialValue(q)).toEqual({ _tag: "Partial", value: 0, placeholder: true });
+    // Zero doesn't count the local rows: until the server answers, the count is `0`.
+    expect(results[0]).toEqual({ _tag: "Partial", value: 0, aggregate: { fn: "count" } });
+    expect(results.at(-1)).toEqual({ _tag: "Complete", value: items.length, aggregate: { fn: "count" } });
+    expect(ZfxQuery.initialValue(q)).toEqual({ _tag: "Partial", value: 0, aggregate: { fn: "count" } });
     const span = recordedSpans.slice(before).find((span) => span.name === "zero.query")!;
     expect(Object.fromEntries(span.attributes)).toEqual({
       "zero.query.name": "messageCount",

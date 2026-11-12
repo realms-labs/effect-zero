@@ -6,14 +6,17 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as QueryResult from "./internal/query-result.js";
 import * as Result from "./result.js";
 
+type Aggregate = QueryResult.QueryResult.Aggregate;
 type Row = { readonly id: string };
 const row = { id: "a" };
 
-// Results as Zero reports them: [data, details]. `aggregate` is whether the query is a top-level aggregate.
-const zeroResult = <A>(value: A, type: "unknown" | "cached" | "complete", aggregate = false) =>
+// Results as Zero reports them: [data, details]. `aggregate` is set for a top-level aggregate query.
+const zeroResult = <A>(value: A, type: "unknown" | "cached" | "complete", aggregate?: Aggregate) =>
   Result.make<A, never>(
-    AsyncResult.success(QueryResult.make([value, { type }] as unknown as ZeroQueryResult<A>, { aggregate })),
+    AsyncResult.success(QueryResult.make([value, { type }] as unknown as ZeroQueryResult<A>, aggregate)),
   );
+const count: Aggregate = { fn: "count" };
+const max: Aggregate = { fn: "max", field: "value" };
 
 // What a mode makes of a result: its value, or "Initial" while it waits.
 const accepted = <A>(result: Result.Result<A>, mode: Result.AcceptPartialMode) =>
@@ -26,9 +29,9 @@ const accepted = <A>(result: Result.Result<A>, mode: Result.AcceptPartialMode) =
 describe("Result", () => {
   it("maps Zero's result types to tags", () => {
     expect(zeroResult([row], "unknown")).toMatchObject({
-      value: { _tag: "Partial", value: [row], placeholder: false },
+      value: { _tag: "Partial", value: [row] },
     });
-    expect(zeroResult(0, "unknown", true)).toMatchObject({ value: { _tag: "Partial", value: 0, placeholder: true } });
+    expect(zeroResult(0, "unknown", count)).toMatchObject({ value: { _tag: "Partial", value: 0, aggregate: count } });
     expect(zeroResult([row], "cached")).toMatchObject({ value: { _tag: "Cached", value: [row] } });
     expect(zeroResult([row], "complete")).toMatchObject({ value: { _tag: "Complete", value: [row] } });
   });
@@ -97,29 +100,29 @@ describe("Result", () => {
     });
   });
 
-  // A top-level aggregate's `Partial` value is a placeholder (`0` for `count()`, `null` for the others), so only the
-  // server's answer counts, as Zero's `useQuery` treats it.
+  // Zero doesn't compute a top-level aggregate locally: its `Partial` value is `0` for `count()` and `null` for the
+  // others. So only the server's answer counts, as Zero's `useQuery` treats it.
   describe.each([
     {
       result: "Partial",
-      count: zeroResult(0, "unknown", true),
-      max: zeroResult<number | null>(null, "unknown", true),
+      count: zeroResult(0, "unknown", count),
+      max: zeroResult<number | null>(null, "unknown", max),
       acceptLocal: { count: "Initial", max: "Initial" },
       acceptConfirmed: { count: "Initial", max: "Initial" },
       waitForServer: { count: "Initial", max: "Initial" },
     },
     {
       result: "Cached",
-      count: zeroResult(0, "cached", true),
-      max: zeroResult<number | null>(null, "cached", true),
+      count: zeroResult(0, "cached", count),
+      max: zeroResult<number | null>(null, "cached", max),
       acceptLocal: { count: 0, max: null },
       acceptConfirmed: { count: 0, max: null },
       waitForServer: { count: "Initial", max: "Initial" },
     },
     {
       result: "Complete",
-      count: zeroResult(3, "complete", true),
-      max: zeroResult<number | null>(7, "complete", true),
+      count: zeroResult(3, "complete", count),
+      max: zeroResult<number | null>(7, "complete", max),
       acceptLocal: { count: 3, max: 7 },
       acceptConfirmed: { count: 3, max: 7 },
       waitForServer: { count: 3, max: 7 },

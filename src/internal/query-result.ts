@@ -1,4 +1,5 @@
 import type { HumanReadable, QueryResultDetails as ZeroQueryResultDetails } from "@rocicorp/zero";
+import type { asQueryInternals } from "@rocicorp/zero/bindings";
 import type { QueryResult as ZeroQueryResult } from "@rocicorp/zero/react";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
@@ -11,10 +12,17 @@ export type QueryResult<A> =
   | QueryResult.Complete<A>
   | QueryResult.Error;
 export namespace QueryResult {
+  /**
+   * What a top-level aggregate query (`count()`, `sum()`, `avg()`, `min()`, `max()`) computes, from Zero's query
+   * format. Zero doesn't compute an aggregate from the local store: until the server answers, its `Partial` value is
+   * the aggregate over no rows, `0` for `count()` and `null` for the others.
+   */
+  export type Aggregate = NonNullable<ReturnType<typeof asQueryInternals>["format"]["aggregate"]>;
   /** Confirmed by the server on this connection. */
   export interface Complete<A> {
     readonly _tag: "Complete";
     readonly value: HumanReadable<A>;
+    readonly aggregate?: Aggregate;
   }
   /**
    * From the local store, which the server confirmed in an earlier session (Zero's `cached`). It may be out of date,
@@ -24,16 +32,13 @@ export namespace QueryResult {
   export interface Cached<A> {
     readonly _tag: "Cached";
     readonly value: HumanReadable<A>;
+    readonly aggregate?: Aggregate;
   }
   /** From the local store, never confirmed by the server (Zero's `unknown`), so it may be missing rows. */
   export interface Partial<A> {
     readonly _tag: "Partial";
     readonly value: HumanReadable<A>;
-    /**
-     * Whether `value` only stands in for a top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`), which
-     * Zero doesn't compute from the local store: until the server answers, `count()` is `0` and the others are `null`.
-     */
-    readonly placeholder: boolean;
+    readonly aggregate?: Aggregate;
   }
   export interface Error {
     readonly _tag: "Error";
@@ -41,15 +46,16 @@ export namespace QueryResult {
   }
 }
 
-/** `aggregate` is whether the query is a top-level aggregate, whose `Partial` results are placeholders. */
+/** `aggregate` is from the query's format, set for a top-level aggregate query. */
 export const make = <A>(
   [value, details]: ZeroQueryResult<A>,
-  { aggregate }: { readonly aggregate: boolean },
+  aggregate: QueryResult.Aggregate | undefined,
 ): QueryResult<A> => {
+  const data = { value, ...(aggregate && { aggregate }) };
   return Match.value(details).pipe(
-    Match.when({ type: "complete" }, () => ({ _tag: "Complete", value }) as const),
-    Match.when({ type: "cached" }, () => ({ _tag: "Cached", value }) as const),
-    Match.when({ type: "unknown" }, () => ({ _tag: "Partial", value, placeholder: aggregate }) as const),
+    Match.when({ type: "complete" }, () => ({ _tag: "Complete", ...data }) as const),
+    Match.when({ type: "cached" }, () => ({ _tag: "Cached", ...data }) as const),
+    Match.when({ type: "unknown" }, () => ({ _tag: "Partial", ...data }) as const),
     Match.when({ type: "error" }, ({ type: _type, ...details }) => ({ _tag: "Error", details }) as const),
     Match.exhaustive,
   );

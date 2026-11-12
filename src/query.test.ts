@@ -141,10 +141,14 @@ describe("initialValue", () => {
   const issue = table("issue").columns({ id: string(), votes: number() }).primaryKey("id");
   const zql = createBuilder(createSchema({ tables: [issue] }));
 
-  it("is an empty list, no row, or an aggregate's placeholder", () => {
-    expect(Query.initialValue(zql.issue)).toEqual({ _tag: "Partial", value: [], placeholder: false });
-    expect(Query.initialValue(zql.issue.one())).toEqual({ _tag: "Partial", value: undefined, placeholder: false });
-    expect(Query.initialValue(zql.issue.count())).toEqual({ _tag: "Partial", value: 0, placeholder: true });
-    expect(Query.initialValue(zql.issue.max("votes"))).toEqual({ _tag: "Partial", value: null, placeholder: true });
+  it("is an empty list, no row, or an aggregate over no rows", () => {
+    expect(Query.initialValue(zql.issue)).toStrictEqual({ _tag: "Partial", value: [] });
+    expect(Query.initialValue(zql.issue.one())).toStrictEqual({ _tag: "Partial", value: undefined });
+    expect(Query.initialValue(zql.issue.count())).toEqual({ _tag: "Partial", value: 0, aggregate: { fn: "count" } });
+    expect(Query.initialValue(zql.issue.max("votes"))).toEqual({
+      _tag: "Partial",
+      value: null,
+      aggregate: { fn: "max", field: "votes" },
+    });
   });
 });
