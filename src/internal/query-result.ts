@@ -53,7 +53,7 @@ export namespace QueryResult {
 /** `aggregate` is from the query's format, set for a top-level aggregate query. */
 export const make = <A>(
   [value, details]: ZeroQueryResult<A>,
-  aggregate: Option.Option<QueryResult.Aggregate>,
+  { aggregate }: { readonly aggregate: Option.Option<QueryResult.Aggregate> },
 ): QueryResult<A> => {
   return Match.value(details).pipe(
     Match.when({ type: "complete" }, () => ({ _tag: "Complete", value, aggregate }) as const),

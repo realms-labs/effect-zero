@@ -1,11 +1,4 @@
-import type {
-  AnyQuery,
-  HumanReadable,
-  ReadonlyJSONValue,
-  Zero,
-  Query as ZeroQuery,
-  Schema as ZeroSchema,
-} from "@rocicorp/zero";
+import type { HumanReadable, ReadonlyJSONValue, Zero, Query as ZeroQuery, Schema as ZeroSchema } from "@rocicorp/zero";
 import { asQueryInternals, emptyViewValue } from "@rocicorp/zero/bindings";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -49,8 +42,8 @@ export const make = <
   payload: Schema.Codec<B, A, R1, R1>;
   query: (args: NoInfer<B>) => Effect.Effect<ZeroQuery<T, S, R>, E, R2>;
 }) => {
-  // Typed as the plain Zero query, without its `Equal`: TypeScript doesn't check a singular or aggregate query
-  // intersected with `Equal` as Zero's `AnyQuery`, which `MakeQueryResult` takes.
+  // Typed as the plain Zero query, without its `Equal`: intersected with `Equal`, a singular or aggregate query doesn't
+  // check as `MakeQueryResult`'s query with `any` rows, since TypeScript then compares its `run()` result structurally.
   const runQuery = Effect.fn(function* (
     args: QueryArgs<A, B>,
   ): Effect.fn.Return<ZeroQuery<T, S, R>, Schema.SchemaError | E, R1 | R2> {
@@ -90,16 +83,11 @@ export const make = <
   });
 };
 
-/**
- * Any query `make` returns, whatever its result: rows, a row, or an aggregate. `E` and `R` are what building it can
- * fail with and needs.
- */
 // biome-ignore lint/suspicious/noExplicitAny: accept any query
-export interface MakeQueryResult<E = any, R = any> {
-  readonly [QueryNameSymbol]: string;
-  // biome-ignore lint/suspicious/noExplicitAny: accept any query's arguments
-  readonly [RunQuerySymbol]: (args: QueryArgs<any, any>) => Effect.Effect<AnyQuery, E, R>;
-}
+export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
+  // biome-ignore lint/suspicious/noExplicitAny: accept any query
+  typeof make<string, any, any, string, ZeroSchema, any, E, R1, R2>
+>;
 
 /**
  * Streams a query's results. Each subscription is traced: a `zero.query` span runs from subscribing until the query's
@@ -157,7 +145,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
           error,
         ),
       ),
-      Stream.map((snapshot) => QueryResult.make(snapshot, aggregate)),
+      Stream.map((snapshot) => QueryResult.make(snapshot, { aggregate })),
       // Records `first_data` once: at the first result with rows, or the first confirmed (cached or complete) result if
       // that comes first. The state is whether that's settled, which an error result (ending the span) also does.
       Stream.mapAccumEffect(
@@ -201,5 +189,5 @@ export const initialValue = <T extends keyof S["tables"] & string, S extends Zer
   const { format } = asQueryInternals(query);
   // `emptyViewValue` takes any format, so TypeScript can't tie its value to `R`.
   const value = emptyViewValue(format) as unknown as HumanReadable<R>;
-  return QueryResult.make<R>([value, { type: "unknown" }], Option.fromNullishOr(format.aggregate));
+  return QueryResult.make<R>([value, { type: "unknown" }], { aggregate: Option.fromNullishOr(format.aggregate) });
 };

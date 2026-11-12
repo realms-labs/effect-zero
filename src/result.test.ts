@@ -13,7 +13,7 @@ const row = { id: "a" };
 // Results as Zero reports them: [data, details]. `aggregate` is set for a top-level aggregate query.
 const zeroResult = <A>(value: A, type: "unknown" | "cached" | "complete", aggregate = Option.none<Aggregate>()) =>
   Result.make<A, never>(
-    AsyncResult.success(QueryResult.make([value, { type }] as unknown as ZeroQueryResult<A>, aggregate)),
+    AsyncResult.success(QueryResult.make([value, { type }] as unknown as ZeroQueryResult<A>, { aggregate })),
   );
 const count = Option.some<Aggregate>({ fn: "count" });
 const max = Option.some<Aggregate>({ fn: "max", field: "value" });
