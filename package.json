@@ -18,7 +18,7 @@
     "@biomejs/biome": "^2.2.6",
     "@effect/language-service": "^0.87.4",
     "@effect/vitest": "^4.0.2",
-    "@rocicorp/zero": "1.12.0-canary.13",
+    "@rocicorp/zero": "1.12.0",
     "@types/bun": "latest",
     "@types/fs-extra": "^11.0.4",
     "effect": "^4.0.2",
