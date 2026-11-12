@@ -309,6 +309,12 @@ const messagesQuery = ZfxQuery.make({
   }),
 });
 
+const messageCountQuery = ZfxQuery.make({
+  name: "messageCount",
+  payload: Schema.Void,
+  query: () => Effect.succeed(builder.messages.count()),
+});
+
 const transformArgsQuerySpy = vi.fn();
 
 const DateFromNumber = Schema.Number.pipe(
@@ -328,7 +334,12 @@ const transformArgsQuery = ZfxQuery.make({
   }),
 });
 
-const queries = [messageByIdQuery, messagesQuery, transformArgsQuery] satisfies ZfxQuery.MakeQueryResult[];
+const queries = [
+  messageByIdQuery,
+  messagesQuery,
+  messageCountQuery,
+  transformArgsQuery,
+] satisfies ZfxQuery.MakeQueryResult[];
 
 // Zero's rows carry its own symbol-keyed bookkeeping (a reference count), which `toEqual` compares. A structured clone
 // drops it, leaving the row's columns.
@@ -1171,6 +1182,46 @@ it.live(
         "zero.query.first_data",
         expect.any(BigInt),
         { "zero.query.result_type": expect.stringMatching(/^(unknown|complete)$/), "zero.query.rows": 1 },
+      ],
+    ]);
+  }, Effect.withTracer(recordingTracer)),
+);
+
+it.live(
+  "an aggregate's local placeholder isn't its first data",
+  Effect.fn(function* () {
+    const z = yield* initZero;
+
+    const items: Message[] = [
+      { id: nanoid(), body: "counted" },
+      { id: nanoid(), body: "counted" },
+    ];
+    yield* Effect.promise(() => ddb.insert(messages).values(items));
+    yield* waitForSync(z, (rows) => rows.length === items.length);
+    const before = recordedSpans.length;
+    const q = yield* messageCountQuery();
+    const results = yield* ZfxQuery.stream(z, q).pipe(
+      Stream.takeUntil((result) => Predicate.isTagged(result, "Complete")),
+      Stream.runCollect,
+      Effect.timeout(Duration.seconds(10)),
+    );
+
+    // Zero doesn't count the local rows: until the server answers, the count is a placeholder `0`.
+    expect(results[0]).toEqual({ _tag: "Partial", value: 0, placeholder: true });
+    expect(results.at(-1)).toEqual({ _tag: "Complete", value: items.length });
+    expect(ZfxQuery.initialValue(q)).toEqual({ _tag: "Partial", value: 0, placeholder: true });
+    const span = recordedSpans.slice(before).find((span) => span.name === "zero.query")!;
+    expect(Object.fromEntries(span.attributes)).toEqual({
+      "zero.query.name": "messageCount",
+      "zero.query.hash": asQueryInternals(q).hash(),
+      "zero.query.aggregate": "count",
+      "zero.clientID": z.clientID,
+    });
+    expect(span.events).toEqual([
+      [
+        "zero.query.first_data",
+        expect.any(BigInt),
+        { "zero.query.result_type": expect.stringMatching(/^(cached|complete)$/) },
       ],
     ]);
   }, Effect.withTracer(recordingTracer)),

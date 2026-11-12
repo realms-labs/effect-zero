@@ -313,11 +313,18 @@ three modes:
 | `Partial` with rows                   | value         | value             | `Initial`       |
 | `Partial` list with no rows           | `[]`          | `Initial`         | `Initial`       |
 | `Partial` singular query with no row  | `Initial`     | `Initial`         | `Initial`       |
+| `Partial` top-level aggregate         | `Initial`     | `Initial`         | `Initial`       |
 | `Cached`, with rows or without        | value         | value             | `Initial`       |
 | `Complete`                            | value         | value             | value           |
 
 Use `acceptConfirmed` where an empty result shows something, like a "nothing here yet" screen: it shows rows as soon as
 there are any, but never an empty result the server hasn't confirmed.
+
+A top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`) has no local result: Zero doesn't compute it from
+the local store, so until the server answers its value is a placeholder, `0` for `count()` and `null` for the others.
+Its `Partial` results say so with `placeholder: true`, and every mode waits for it to be cached or complete. An
+aggregate in a relationship, like `related("comments", (q) => q.count())`, is part of its parent's rows, which the
+modes treat as usual.
 
 ## Differences from the original implementation
 

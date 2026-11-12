@@ -29,6 +29,11 @@ export namespace QueryResult {
   export interface Partial<A> {
     readonly _tag: "Partial";
     readonly value: HumanReadable<A>;
+    /**
+     * Whether `value` only stands in for a top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`), which
+     * Zero doesn't compute from the local store: until the server answers, `count()` is `0` and the others are `null`.
+     */
+    readonly placeholder: boolean;
   }
   export interface Error {
     readonly _tag: "Error";
@@ -36,11 +41,15 @@ export namespace QueryResult {
   }
 }
 
-export const make = <A>([value, details]: ZeroQueryResult<A>): QueryResult<A> => {
+/** `aggregate` is whether the query is a top-level aggregate, whose `Partial` results are placeholders. */
+export const make = <A>(
+  [value, details]: ZeroQueryResult<A>,
+  { aggregate }: { readonly aggregate: boolean },
+): QueryResult<A> => {
   return Match.value(details).pipe(
     Match.when({ type: "complete" }, () => ({ _tag: "Complete", value }) as const),
     Match.when({ type: "cached" }, () => ({ _tag: "Cached", value }) as const),
-    Match.when({ type: "unknown" }, () => ({ _tag: "Partial", value }) as const),
+    Match.when({ type: "unknown" }, () => ({ _tag: "Partial", value, placeholder: aggregate }) as const),
     Match.when({ type: "error" }, ({ type: _type, ...details }) => ({ _tag: "Error", details }) as const),
     Match.exhaustive,
   );

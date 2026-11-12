@@ -1,5 +1,12 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
-import type { MutateRequest as ZeroMutateRequest } from "@rocicorp/zero";
+import {
+  createBuilder,
+  createSchema,
+  number,
+  string,
+  table,
+  type MutateRequest as ZeroMutateRequest,
+} from "@rocicorp/zero";
 import { queryInternalsTag } from "@rocicorp/zero/bindings";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -302,6 +309,27 @@ describe("Type tests", () => {
 
       // This should compile without error
       const queries = [query1, query2] satisfies Query.MakeQueryResult[];
+      expectTypeOf(queries).toExtend<Query.MakeQueryResult[]>();
+    });
+
+    it("MakeQueryResult should be satisfied by singular and aggregate queries", () => {
+      const issue = table("issue").columns({ id: string(), votes: number() }).primaryKey("id");
+      const zql = createBuilder(createSchema({ tables: [issue] }));
+      const queries = [
+        Query.make({ name: "issues", payload: Schema.Void, query: () => Effect.succeed(zql.issue) }),
+        Query.make({
+          name: "issue",
+          payload: Schema.String,
+          query: (id) => Effect.succeed(zql.issue.where("id", id).one()),
+        }),
+        Query.make({ name: "count", payload: Schema.Void, query: () => Effect.succeed(zql.issue.count()) }),
+        Query.make({ name: "max", payload: Schema.Void, query: () => Effect.succeed(zql.issue.max("votes")) }),
+        Query.make({
+          name: "byVotes",
+          payload: Schema.Void,
+          query: () => Effect.succeed(zql.issue.groupBy("votes").count()),
+        }),
+      ] satisfies Query.MakeQueryResult[];
       expectTypeOf(queries).toExtend<Query.MakeQueryResult[]>();
     });
   });

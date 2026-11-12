@@ -223,18 +223,18 @@ class HandleMutateError extends Data.TaggedError("HandleMutateError")<{ readonly
  *
  * `userId` is the authenticated user's ID, or `null` or `undefined` for a logged-out client; see {@link handleMutate}.
  */
-export const handleQuery = Effect.fn(function* <E, R1, R2>({
+export const handleQuery = Effect.fn(function* <E, R>({
   queries,
   schema,
   body,
   userId,
 }: {
-  queries: MakeQueryResult<E, R1, R2>[];
+  queries: MakeQueryResult<E, R>[];
   schema: ZeroSchema;
   body: TransformRequestMessage;
   userId: QueryUserId;
 }) {
-  const ctx = yield* Effect.context<R1 | R2>();
+  const ctx = yield* Effect.context<R>();
   return yield* Effect.tryPromise({
     try: () =>
       handleQueryRequest({

@@ -1,4 +1,5 @@
-import { describe, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { createBuilder, createSchema, number, string, table } from "@rocicorp/zero";
 import { queryInternalsTag } from "@rocicorp/zero/bindings";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -134,4 +135,16 @@ describe("Query hashing", () => {
       expect(Hash.hash(query1)).not.toBe(Hash.hash(query3));
     }),
   );
+});
+
+describe("initialValue", () => {
+  const issue = table("issue").columns({ id: string(), votes: number() }).primaryKey("id");
+  const zql = createBuilder(createSchema({ tables: [issue] }));
+
+  it("is an empty list, no row, or an aggregate's placeholder", () => {
+    expect(Query.initialValue(zql.issue)).toEqual({ _tag: "Partial", value: [], placeholder: false });
+    expect(Query.initialValue(zql.issue.one())).toEqual({ _tag: "Partial", value: undefined, placeholder: false });
+    expect(Query.initialValue(zql.issue.count())).toEqual({ _tag: "Partial", value: 0, placeholder: true });
+    expect(Query.initialValue(zql.issue.max("votes"))).toEqual({ _tag: "Partial", value: null, placeholder: true });
+  });
 });
