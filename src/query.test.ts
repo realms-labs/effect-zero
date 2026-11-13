@@ -1,8 +1,10 @@
-import { describe, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { createBuilder, createSchema, number, string, table } from "@rocicorp/zero";
 import { queryInternalsTag } from "@rocicorp/zero/bindings";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Query from "./query.js";
 
@@ -134,4 +136,28 @@ describe("Query hashing", () => {
       expect(Hash.hash(query1)).not.toBe(Hash.hash(query3));
     }),
   );
+});
+
+describe("initialValue", () => {
+  const issue = table("issue").columns({ id: string(), votes: number() }).primaryKey("id");
+  const zql = createBuilder(createSchema({ tables: [issue] }));
+
+  it("is an empty list, no row, or an aggregate over no rows", () => {
+    expect(Query.initialValue(zql.issue)).toEqual({ _tag: "Partial", value: [], aggregate: Option.none() });
+    expect(Query.initialValue(zql.issue.one())).toEqual({
+      _tag: "Partial",
+      value: undefined,
+      aggregate: Option.none(),
+    });
+    expect(Query.initialValue(zql.issue.count())).toEqual({
+      _tag: "Partial",
+      value: 0,
+      aggregate: Option.some({ fn: "count" }),
+    });
+    expect(Query.initialValue(zql.issue.max("votes"))).toEqual({
+      _tag: "Partial",
+      value: null,
+      aggregate: Option.some({ fn: "max", field: "votes" }),
+    });
+  });
 });

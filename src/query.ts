@@ -1,5 +1,5 @@
 import type { HumanReadable, ReadonlyJSONValue, Zero, Query as ZeroQuery, Schema as ZeroSchema } from "@rocicorp/zero";
-import { asQueryInternals } from "@rocicorp/zero/bindings";
+import { asQueryInternals, emptyViewValue } from "@rocicorp/zero/bindings";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -16,7 +16,7 @@ import * as Stream from "effect/Stream";
 import * as QueryResult from "./internal/query-result.js";
 import { prefixId } from "./internal/utils.js";
 import { QueryError } from "./result.js";
-import { getDefaultSnapshot, getSnapshot } from "./snapshot.js";
+import { getSnapshot } from "./snapshot.js";
 
 // biome-ignore lint/suspicious/noConfusingVoidType: necessary to allow Schema.Void
 type QueryArgs<A extends ReadonlyJSONValue | void, B> = { _tag: "Encoded"; args: A } | { _tag: "Decoded"; args: B };
@@ -42,7 +42,11 @@ export const make = <
   payload: Schema.Codec<B, A, R1, R1>;
   query: (args: NoInfer<B>) => Effect.Effect<ZeroQuery<T, S, R>, E, R2>;
 }) => {
-  const runQuery = Effect.fn(function* (args: QueryArgs<A, B>) {
+  // Typed as the plain Zero query, without its `Equal`: intersected with `Equal`, a singular or aggregate query doesn't
+  // check as `MakeQueryResult`'s query with `any` rows, since TypeScript then compares its `run()` result structurally.
+  const runQuery = Effect.fn(function* (
+    args: QueryArgs<A, B>,
+  ): Effect.fn.Return<ZeroQuery<T, S, R>, Schema.SchemaError | E, R1 | R2> {
     const { encoded, decoded } = yield* Match.valueTags(args, {
       Encoded: ({ args: encoded }) =>
         Effect.map(Schema.decodeEffect(options.payload)(encoded), (decoded) => ({ encoded, decoded })),
@@ -82,14 +86,15 @@ export const make = <
 // biome-ignore lint/suspicious/noExplicitAny: accept any query
 export type MakeQueryResult<E = any, R1 = any, R2 = any> = ReturnType<
   // biome-ignore lint/suspicious/noExplicitAny: accept any query
-  typeof make<string, any, any, string, ZeroSchema, Record<string, any> | undefined, E, R1, R2>
+  typeof make<string, any, any, string, ZeroSchema, any, E, R1, R2>
 >;
 
 /**
  * Streams a query's results. Each subscription is traced: a `zero.query` span runs from subscribing until the query's
  * first complete result, which for rows this client hasn't synced yet is zero-cache's first sync of the query. Its
  * `zero.query.first_data` event marks the first result with rows (or the first cached or complete result, if that
- * comes first), which may come from the client's local store before the server confirms it. An error result fails
+ * comes first), which may come from the client's local store before the server confirms it. Zero doesn't compute a
+ * top-level aggregate locally, so its first data is its first cached or complete result. An error result fails
  * the span with its `QueryError`, and a subscriber that stops first interrupts it.
  *
  * Results are Zero's own objects, shared with its view, so don't mutate them. Rows that didn't change keep their
@@ -102,6 +107,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
 ) =>
   Effect.gen(function* () {
     const internals = asQueryInternals(query);
+    const aggregate = Option.fromNullishOr(internals.format.aggregate);
     // Closed by the first complete or error result, or as interrupted when the stream ends first.
     const spanScope = yield* Effect.acquireRelease(Scope.make(), (scope, exit) =>
       Scope.close(scope, Exit.isSuccess(exit) ? Exit.interrupt() : exit),
@@ -110,7 +116,10 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
       attributes: {
         "zero.query.hash": internals.hash(),
         "zero.clientID": zero.clientID,
-        ...Rec.getSomes({ "zero.query.name": Option.fromNullishOr(internals.customQueryID?.name) }),
+        ...Rec.getSomes({
+          "zero.query.name": Option.fromNullishOr(internals.customQueryID?.name),
+          "zero.query.aggregate": Option.map(aggregate, ({ fn }) => fn),
+        }),
       },
     }).pipe(Scope.provide(spanScope));
     const view = yield* Effect.acquireRelease(
@@ -122,7 +131,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
       Effect.sync(() => view.addListener((...args) => Queue.offerUnsafe(queue, args))),
     ).pipe(
       Stream.map(([data, resultType, error]) =>
-        // logic here borrowed from: https://github.com/rocicorp/mono/blob/c22b300d15435712a4c5e61313645881942f1d3a/packages/zero-react/src/use-query.tsx
+        // logic here borrowed from: https://github.com/rocicorp/mono/blob/d489a3218ad603b3fd65e33cec76ae77cea7c7af/packages/zero-react/src/use-query.tsx
         // A view's data is immutable once its listeners have it (each change copies what it touches), so it isn't
         // copied here: rows that didn't change keep their identity from one result to the next.
         getSnapshot<R>(
@@ -136,7 +145,7 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
           error,
         ),
       ),
-      Stream.map(QueryResult.make),
+      Stream.map((snapshot) => QueryResult.make(snapshot, { aggregate })),
       // Records `first_data` once: at the first result with rows, or the first confirmed (cached or complete) result if
       // that comes first. The state is whether that's settled, which an error result (ending the span) also does.
       Stream.mapAccumEffect(
@@ -144,14 +153,17 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
         Effect.fnUntraced(function* (settled, result) {
           if (settled || Predicate.isTagged(result, "Error")) return [true, [result]] as const;
           const rows = QueryResult.rowCount(result.value);
-          if (Predicate.isTagged(result, "Partial") && rows === 0) return [false, [result]] as const;
+          if (Predicate.isTagged(result, "Partial") && (Option.isSome(aggregate) || rows === 0)) {
+            return [false, [result]] as const;
+          }
           span.event("zero.query.first_data", yield* Clock.currentTimeNanos, {
             "zero.query.result_type": Match.valueTags(result, {
               Partial: () => "unknown",
               Cached: () => "cached",
               Complete: () => "complete",
             }),
-            "zero.query.rows": rows,
+            // An aggregate's result is a value, not rows.
+            ...(Option.isNone(aggregate) ? { "zero.query.rows": rows } : {}),
           });
           return [true, [result]] as const;
         }),
@@ -167,6 +179,15 @@ export const stream = <T extends keyof S["tables"] & string, S extends ZeroSchem
     );
   }).pipe(Stream.unwrap);
 
+/**
+ * What a query shows before its first result: an empty list, no row, or a top-level aggregate over no rows (`0` for
+ * `count()`, `null` for the others), as a `Partial` result.
+ */
 export const initialValue = <T extends keyof S["tables"] & string, S extends ZeroSchema, R>(
   query: ZeroQuery<T, S, R>,
-) => QueryResult.make<R>(getDefaultSnapshot(asQueryInternals(query).format.singular));
+) => {
+  const { format } = asQueryInternals(query);
+  // `emptyViewValue` takes any format, so TypeScript can't tie its value to `R`.
+  const value = emptyViewValue(format) as unknown as HumanReadable<R>;
+  return QueryResult.make<R>([value, { type: "unknown" }], { aggregate: Option.fromNullishOr(format.aggregate) });
+};

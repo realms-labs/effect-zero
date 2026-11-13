@@ -185,6 +185,9 @@ export const acceptPartialMode: {
      * - `waitForServer` -> Will wait for the complete result (from the server) before resolving
      *   - When you want to wait for the server before doing something.
      *   - Only used for queries in which you need an fully accurate result before doing something.
+     *
+     * Zero doesn't compute a top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`) locally, so
+     * `acceptLocal` and `acceptConfirmed` wait for it to be cached or complete.
      **/
     mode: AcceptPartialMode,
   ): Accepted<A, E>;
@@ -205,6 +208,9 @@ export const acceptPartialMode: {
      * - `waitForServer` -> Will wait for the complete result (from the server) before resolving
      *   - When you want to wait for the server before doing something.
      *   - Only used for queries in which you need an fully accurate result before doing something.
+     *
+     * Zero doesn't compute a top-level aggregate (`count()`, `sum()`, `avg()`, `min()`, `max()`) locally, so
+     * `acceptLocal` and `acceptConfirmed` wait for it to be cached or complete.
      **/
     mode: AcceptPartialMode,
   ): <A, E>(self: Result<A, E>) => Accepted<A, E>;
@@ -212,10 +218,16 @@ export const acceptPartialMode: {
   acceptPartialWith(self, (result) =>
     Match.value(mode).pipe(
       Match.when("acceptLocal", () =>
-        Match.valueTags(result, { Partial: ({ value }) => Predicate.isNotUndefined(value), Cached: () => true }),
+        Match.valueTags(result, {
+          Partial: ({ value, aggregate }) => Option.isNone(aggregate) && Predicate.isNotUndefined(value),
+          Cached: () => true,
+        }),
       ),
       Match.when("acceptConfirmed", () =>
-        Match.valueTags(result, { Partial: ({ value }) => rowCount(value) > 0, Cached: () => true }),
+        Match.valueTags(result, {
+          Partial: ({ value, aggregate }) => Option.isNone(aggregate) && rowCount(value) > 0,
+          Cached: () => true,
+        }),
       ),
       Match.when("waitForServer", () => false),
       Match.exhaustive,

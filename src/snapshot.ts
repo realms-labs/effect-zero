@@ -1,5 +1,5 @@
 // Code borrowed from:
-// https://github.com/rocicorp/mono/blob/c22b300d15435712a4c5e61313645881942f1d3a/packages/zero-react/src/use-query.tsx (zero/v1.11.5)
+// https://github.com/rocicorp/mono/blob/d489a3218ad603b3fd65e33cec76ae77cea7c7af/packages/zero-react/src/use-query.tsx (zero/v1.12.0)
 
 import type { ErroredQuery, HumanReadable, QueryErrorDetails, ResultType } from "@rocicorp/zero";
 import type { QueryResult } from "@rocicorp/zero/react";
@@ -19,10 +19,6 @@ const emptySnapshotPluralUnknown = [emptyArray, resultTypeUnknown] as const;
 const emptySnapshotPluralCached = [emptyArray, resultTypeCached] as const;
 const emptySnapshotPluralComplete = [emptyArray, resultTypeComplete] as const;
 const emptySnapshotErrorUnknown = [emptyArray, resultTypeError] as const;
-
-export function getDefaultSnapshot<TReturn>(singular: boolean): QueryResult<TReturn> {
-  return (singular ? emptySnapshotSingularUnknown : emptySnapshotPluralUnknown) as QueryResult<TReturn>;
-}
 
 /**
  * Returns a new snapshot or one of the empty predefined ones. Returning the
